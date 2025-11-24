@@ -54,12 +54,11 @@ services:
     environment:
       # Override database host for Docker network
       POSTGRES_HOST: db
-      # Redis configuration - using values from .env (external Redis Cloud)
-      # If you want to use local Redis container, uncomment these lines:
-      # REDIS_HOST: redis
-      # REDIS_PORT: 6379
-      # REDIS_DB: 0
-      # REDIS_PASSWORD: ""
+      # Redis configuration - using external Redis Cloud from .env
+      REDIS_HOST: ${REDIS_HOST}
+      REDIS_PORT: ${REDIS_PORT}
+      REDIS_DB: ${REDIS_DB:-0}
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
       # Monitoring configuration
       MONITORING_HOST: 0.0.0.0
       MONITORING_PORT: 9090
