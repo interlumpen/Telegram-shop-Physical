@@ -5,6 +5,10 @@ from bot.database.methods.inventory import cleanup_expired_reservations
 
 logger = logging.getLogger(__name__)
 
+# Strong reference to the long-lived cleaner task so it is not garbage-collected
+# (asyncio only holds a weak reference to tasks).
+_cleaner_task: "asyncio.Task | None" = None
+
 
 async def run_reservation_cleaner():
     """
@@ -37,5 +41,7 @@ def start_reservation_cleaner():
     Start the reservation cleaner task in the background.
     Call this function when the bot starts.
     """
-    asyncio.create_task(run_reservation_cleaner())
+    global _cleaner_task
+    _cleaner_task = asyncio.create_task(run_reservation_cleaner())
     logger.info("Reservation cleaner task scheduled")
+    return _cleaner_task

@@ -11,6 +11,19 @@ from bot.database.models import Database, User, Goods, Categories, Role, BoughtG
 from bot.caching import get_cache_manager
 
 
+async def run_db(func, *args, **kwargs):
+    """Run a synchronous DB callable in the default thread-pool executor.
+
+    Lets async handlers/middleware call the sync data layer without blocking the
+    event loop. Use this on hot paths (checkout writes, middleware role checks).
+    """
+    loop = asyncio.get_running_loop()
+    if kwargs:
+        from functools import partial
+        return await loop.run_in_executor(None, partial(func, *args, **kwargs))
+    return await loop.run_in_executor(None, func, *args)
+
+
 # Wrapper for synchronous functions to asynchronous functions with caching
 def async_cached(ttl: int = 300, key_prefix: str = ""):
     def decorator(sync_func):
@@ -27,7 +40,7 @@ def async_cached(ttl: int = 300, key_prefix: str = ""):
                     return cached_value
 
             # Execute synchronous function in executor
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             result = await loop.run_in_executor(None, sync_func, *args)
 
             # Save to cache

@@ -44,7 +44,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
 
         # === Profile Info Lines ===
         "profile.id": "🆔 <b>ID</b> — <code>{id}</code>",
-        "profile.bonus_balance": "💰 <b>Реферальный бонус:</b> ${bonus_balance}",
+        "profile.bonus_balance": "💰 <b>Реферальный бонус:</b> {bonus_balance} {currency}",
         "profile.purchased_count": "🎁 <b>Куплено товаров</b> — {count} шт",
         "profile.registration_date": "🕢 <b>Дата регистрации</b> — <code>{dt}</code>",
 
@@ -308,7 +308,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "btn.clear_cart": "🗑️ Очистить корзину",
         "btn.proceed_checkout": "💳 Перейти к оформлению",
         "btn.remove_item": "❌ Удалить {item_name}",
-        "btn.use_all_bonus": "Использовать все ${amount}",
+        "btn.use_all_bonus": "Использовать все {amount} {currency}",
         "btn.apply_bonus_yes": "✅ Да, применить бонус",
         "btn.apply_bonus_no": "❌ Нет, сохранить на потом",
         "btn.cancel": "❌ Отменить",
@@ -339,13 +339,13 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "order.delivery.info_save_error": "❌ Ошибка сохранения информации о доставке. Пожалуйста, попробуйте еще раз.",
 
         # === Bonus/Referral Application ===
-        "order.bonus.available": "💰 <b>У вас есть ${bonus_balance} в реферальных бонусах!</b>\n\n",
+        "order.bonus.available": "💰 <b>У вас есть {bonus_balance} {currency} в реферальных бонусах!</b>\n\n",
         "order.bonus.apply_question": "Хотите ли вы применить реферальный бонус к этому заказу?",
         "order.bonus.amount_positive_error": "❌ Пожалуйста, введите положительную сумму.",
-        "order.bonus.amount_too_high": "❌ Сумма слишком велика. Максимум применимо: ${max_applicable}\nПожалуйста, введите корректную сумму:",
+        "order.bonus.amount_too_high": "❌ Сумма слишком велика. Максимум применимо: {max_applicable} {currency}\nПожалуйста, введите корректную сумму:",
         "order.bonus.invalid_amount": "❌ Неверная сумма. Пожалуйста, введите число (например, 5.50):",
         "order.bonus.insufficient": "❌ Недостаточный бонусный баланс. Пожалуйста, попробуйте снова.",
-        "order.bonus.enter_amount": "Введите сумму бонуса, которую вы хотите применить (максимум ${max_applicable}):\n\nИли используйте все доступные бонусы, нажав кнопку ниже.",
+        "order.bonus.enter_amount": "Введите сумму бонуса, которую вы хотите применить (максимум {max_applicable} {currency}):\n\nИли используйте все доступные бонусы, нажав кнопку ниже.",
 
         # === Payment Instructions ===
         "order.payment.system_unavailable": "❌ <b>Платежная система временно недоступна</b>\n\nНет доступных Bitcoin-адресов. Пожалуйста, свяжитесь с поддержкой.",
@@ -354,9 +354,9 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
 
         # === Order Summary/Total ===
         "order.summary.title": "📦 <b>Сводка заказа</b>\n\n",
-        "order.summary.cart_total": "Итого корзины: ${cart_total}",
-        "order.summary.bonus_applied": "Применен бонус: -${bonus_applied}",
-        "order.summary.final_amount": "Итоговая сумма: ${final_amount}",
+        "order.summary.cart_total": "Итого корзины: {cart_total} {currency}",
+        "order.summary.bonus_applied": "Применен бонус: -{bonus_applied} {currency}",
+        "order.summary.final_amount": "Итоговая сумма: {final_amount} {currency}",
 
         # === Inventory/Reservation ===
         "order.inventory.unable_to_reserve": "❌ <b>Не удается зарезервировать товары</b>\n\nСледующие товары недоступны в запрошенных количествах:\n\n{unavailable_items}\n\nПожалуйста, скорректируйте вашу корзину и попробуйте снова.",
@@ -385,10 +385,10 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         # === Order Details Display ===
         "myorders.detail.title": "📦 <b>Детали заказа #{order_code}</b>\n\n",
         "myorders.detail.status": "📊 <b>Статус:</b> {status}\n",
-        "myorders.detail.subtotal": "💵 <b>Подытог:</b> ${subtotal}\n",
-        "myorders.detail.bonus_applied": "🎁 <b>Применен бонус:</b> ${bonus}\n",
-        "myorders.detail.final_price": "💰 <b>Итоговая цена:</b> ${total}\n",
-        "myorders.detail.total_price": "💰 <b>Итоговая цена:</b> ${total}\n",
+        "myorders.detail.subtotal": "💵 <b>Подытог:</b> {subtotal} {currency}\n",
+        "myorders.detail.bonus_applied": "🎁 <b>Применен бонус:</b> {bonus} {currency}\n",
+        "myorders.detail.final_price": "💰 <b>Итоговая цена:</b> {total} {currency}\n",
+        "myorders.detail.total_price": "💰 <b>Итоговая цена:</b> {total} {currency}\n",
         "myorders.detail.payment_method": "💳 <b>Способ оплаты:</b> {method}\n",
         "myorders.detail.ordered": "📅 <b>Заказано:</b> {date}\n",
         "myorders.detail.delivery_time": "🚚 <b>Запланированная доставка:</b> {time}\n",
@@ -411,11 +411,11 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "admin.goods.add.stock.error": "❌ Ошибка при добавлении начального запаса: {error}",
         "admin.order.action_required_title": "⏳ <b>Требуется действие:</b>",
         "admin.order.address_label": "Адрес: {address}",
-        "admin.order.amount_to_collect_label": "<b>Сумма к получению: ${amount} {currency}</b>",
-        "admin.order.amount_to_receive_label": "<b>Сумма к получению: ${amount} {currency}</b>",
+        "admin.order.amount_to_collect_label": "<b>Сумма к получению: {amount} {currency}</b>",
+        "admin.order.amount_to_receive_label": "<b>Сумма к получению: {amount} {currency}</b>",
         "admin.order.awaiting_payment_status": "⏳ Ожидание подтверждения оплаты...",
         "admin.order.bitcoin_address_label": "Bitcoin адрес: <code>{address}</code>",
-        "admin.order.bonus_applied_label": "Применён бонус: <b>-${amount}</b>",
+        "admin.order.bonus_applied_label": "Применён бонус: <b>-{amount} {currency}</b>",
         "admin.order.customer_label": "Покупатель: {username} (ID: {id})",
         "admin.order.delivery_info_title": "<b>Информация о доставке:</b>",
         "admin.order.items_title": "<b>Товары:</b>",
@@ -426,7 +426,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "admin.order.payment_cash": "Наличными при доставке",
         "admin.order.payment_method_label": "Способ оплаты: <b>{method}</b>",
         "admin.order.phone_label": "Телефон: {phone}",
-        "admin.order.subtotal_label": "Подытог: <b>${amount} {currency}</b>",
+        "admin.order.subtotal_label": "Подытог: <b>{amount} {currency}</b>",
         "admin.order.use_cli_confirm": "Используйте CLI для подтверждения заказа и установки времени доставки:\n<code>python bot_cli.py order --order-code {code} --status-confirmed --delivery-time \"YYYY-MM-DD HH:MM\"</code>",
         "btn.admin.back_to_panel": "🔙 Назад в панель администратора",
         "btn.admin.create_refcode": "➕ Создать реферальный код",
@@ -461,11 +461,11 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "myorders.detail.preparing_message": "Ваш заказ готовится к доставке.",
         "myorders.detail.scheduled_delivery_label": "Запланированная доставка: <b>{time}</b>",
         "myorders.order_summary_format": "{status_emoji} {code} - {items_count} товаров - {total} {currency}",
-        "order.bonus.available_label": "Доступный бонус: <b>${amount}</b>",
-        "order.bonus.choose_amount_hint": "Вы можете выбрать сколько использовать (до ${max_amount})",
+        "order.bonus.available_label": "Доступный бонус: <b>{amount} {currency}</b>",
+        "order.bonus.choose_amount_hint": "Вы можете выбрать сколько использовать (до {max_amount} {currency})",
         "order.bonus.enter_amount_title": "💵 <b>Введите сумму бонуса для применения</b>",
-        "order.bonus.max_applicable_label": "Максимум применимо: <b>${amount}</b>",
-        "order.bonus.order_total_label": "Сумма заказа: <b>${amount} {currency}</b>",
+        "order.bonus.max_applicable_label": "Максимум применимо: <b>{amount} {currency}</b>",
+        "order.bonus.order_total_label": "Сумма заказа: <b>{amount} {currency}</b>",
         "order.info.view_status_hint": "💡 Вы можете просмотреть статус заказа в любое время, используя команду /orders.",
         "order.payment.bitcoin.address_title": "<b>Bitcoin адрес для оплаты:</b>",
         "order.payment.bitcoin.admin_confirm": "• После оплаты администратор подтвердит ваш заказ",
@@ -562,7 +562,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
 
         # === Profile Info Lines ===
         "profile.id": "🆔 <b>ID</b> — <code>{id}</code>",
-        "profile.bonus_balance": "💰 <b>Referral Bonus:</b> ${bonus_balance}",
+        "profile.bonus_balance": "💰 <b>Referral Bonus:</b> {bonus_balance} {currency}",
         "profile.purchased_count": "🎁 <b>Purchased items</b> — {count} pcs",
         "profile.registration_date": "🕢 <b>Registered at</b> — <code>{dt}</code>",
 
@@ -820,7 +820,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "btn.clear_cart": "🗑️ Clear Cart",
         "btn.proceed_checkout": "💳 Proceed to Checkout",
         "btn.remove_item": "❌ Remove {item_name}",
-        "btn.use_all_bonus": "Use all ${amount}",
+        "btn.use_all_bonus": "Use all {amount} {currency}",
         "btn.apply_bonus_yes": "✅ Yes, apply bonus",
         "btn.apply_bonus_no": "❌ No, save for later",
         "btn.cancel": "❌ Cancel",
@@ -851,13 +851,13 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "order.delivery.info_save_error": "❌ Error saving delivery information. Please try again.",
 
         # === Bonus/Referral Application ===
-        "order.bonus.available": "💰 <b>You have ${bonus_balance} in referral bonuses!</b>\n\n",
+        "order.bonus.available": "💰 <b>You have {bonus_balance} {currency} in referral bonuses!</b>\n\n",
         "order.bonus.apply_question": "Would you like to apply referral bonus to this order?",
         "order.bonus.amount_positive_error": "❌ Please enter a positive amount.",
-        "order.bonus.amount_too_high": "❌ Amount too high. Maximum applicable: ${max_applicable}\nPlease enter a valid amount:",
+        "order.bonus.amount_too_high": "❌ Amount too high. Maximum applicable: {max_applicable} {currency}\nPlease enter a valid amount:",
         "order.bonus.invalid_amount": "❌ Invalid amount. Please enter a number (e.g., 5.50):",
         "order.bonus.insufficient": "❌ Insufficient bonus balance. Please try again.",
-        "order.bonus.enter_amount": "Enter the bonus amount you want to apply (maximum ${max_applicable}):\n\nOr use all available bonuses by clicking the button below.",
+        "order.bonus.enter_amount": "Enter the bonus amount you want to apply (maximum {max_applicable} {currency}):\n\nOr use all available bonuses by clicking the button below.",
 
         # === Payment Instructions ===
         "order.payment.system_unavailable": "❌ <b>Payment System Temporarily Unavailable</b>\n\nNo Bitcoin addresses available. Please contact support.",
@@ -866,9 +866,9 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
 
         # === Order Summary/Total ===
         "order.summary.title": "📦 <b>Order Summary</b>\n\n",
-        "order.summary.cart_total": "Cart Total: ${cart_total}",
-        "order.summary.bonus_applied": "Bonus Applied: -${bonus_applied}",
-        "order.summary.final_amount": "Final Amount: ${final_amount}",
+        "order.summary.cart_total": "Cart Total: {cart_total} {currency}",
+        "order.summary.bonus_applied": "Bonus Applied: -{bonus_applied} {currency}",
+        "order.summary.final_amount": "Final Amount: {final_amount} {currency}",
 
         # === Inventory/Reservation ===
         "order.inventory.unable_to_reserve": "❌ <b>Unable to Reserve Items</b>\n\nThe following items are not available in the requested quantities:\n\n{unavailable_items}\n\nPlease adjust your cart and try again.",
@@ -897,10 +897,10 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         # === Order Details Display ===
         "myorders.detail.title": "📦 <b>Order Details #{order_code}</b>\n\n",
         "myorders.detail.status": "📊 <b>Status:</b> {status}\n",
-        "myorders.detail.subtotal": "💵 <b>Subtotal:</b> ${subtotal}\n",
-        "myorders.detail.bonus_applied": "🎁 <b>Bonus Applied:</b> ${bonus}\n",
-        "myorders.detail.final_price": "💰 <b>Final Price:</b> ${total}\n",
-        "myorders.detail.total_price": "💰 <b>Total Price:</b> ${total}\n",
+        "myorders.detail.subtotal": "💵 <b>Subtotal:</b> {subtotal} {currency}\n",
+        "myorders.detail.bonus_applied": "🎁 <b>Bonus Applied:</b> {bonus} {currency}\n",
+        "myorders.detail.final_price": "💰 <b>Final Price:</b> {total} {currency}\n",
+        "myorders.detail.total_price": "💰 <b>Total Price:</b> {total} {currency}\n",
         "myorders.detail.payment_method": "💳 <b>Payment Method:</b> {method}\n",
         "myorders.detail.ordered": "📅 <b>Ordered:</b> {date}\n",
         "myorders.detail.delivery_time": "🚚 <b>Scheduled Delivery:</b> {time}\n",
@@ -922,11 +922,11 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         # === Admin Order Notifications ===
         "admin.order.action_required_title": "⏳ <b>Action Required:</b>",
         "admin.order.address_label": "Address: {address}",
-        "admin.order.amount_to_collect_label": "<b>Amount to Collect: ${amount} {currency}</b>",
-        "admin.order.amount_to_receive_label": "<b>Amount to Receive: ${amount} {currency}</b>",
+        "admin.order.amount_to_collect_label": "<b>Amount to Collect: {amount} {currency}</b>",
+        "admin.order.amount_to_receive_label": "<b>Amount to Receive: {amount} {currency}</b>",
         "admin.order.awaiting_payment_status": "⏳ Awaiting payment confirmation...",
         "admin.order.bitcoin_address_label": "Bitcoin Address: <code>{address}</code>",
-        "admin.order.bonus_applied_label": "Bonus Applied: <b>-${amount}</b>",
+        "admin.order.bonus_applied_label": "Bonus Applied: <b>-{amount} {currency}</b>",
         "admin.order.customer_label": "Customer: {username} (ID: {id})",
         "admin.order.delivery_info_title": "<b>Delivery Information:</b>",
         "admin.order.items_title": "<b>Items:</b>",
@@ -937,7 +937,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "admin.order.payment_cash": "Cash on Delivery",
         "admin.order.payment_method_label": "Payment Method: <b>{method}</b>",
         "admin.order.phone_label": "Phone: {phone}",
-        "admin.order.subtotal_label": "Subtotal: <b>${amount} {currency}</b>",
+        "admin.order.subtotal_label": "Subtotal: <b>{amount} {currency}</b>",
         "admin.order.use_cli_confirm": "Use CLI to confirm order and set delivery time:\n<code>python bot_cli.py order --order-code {code} --status-confirmed --delivery-time \"YYYY-MM-DD HH:MM\"</code>",
         "btn.admin.back_to_panel": "🔙 Back to Admin Panel",
         "btn.admin.create_refcode": "➕ Create Reference Code",
@@ -972,11 +972,11 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "myorders.detail.preparing_message": "Your order is being prepared for delivery.",
         "myorders.detail.scheduled_delivery_label": "Scheduled delivery: <b>{time}</b>",
         "myorders.order_summary_format": "{status_emoji} {code} - {items_count} items - {total} {currency}",
-        "order.bonus.available_label": "Available bonus: <b>${amount}</b>",
-        "order.bonus.choose_amount_hint": "You can choose how much to use (up to ${max_amount})",
+        "order.bonus.available_label": "Available bonus: <b>{amount} {currency}</b>",
+        "order.bonus.choose_amount_hint": "You can choose how much to use (up to {max_amount} {currency})",
         "order.bonus.enter_amount_title": "💵 <b>Enter the bonus amount to apply</b>",
-        "order.bonus.max_applicable_label": "Maximum applicable: <b>${amount}</b>",
-        "order.bonus.order_total_label": "Order total: <b>${amount} {currency}</b>",
+        "order.bonus.max_applicable_label": "Maximum applicable: <b>{amount} {currency}</b>",
+        "order.bonus.order_total_label": "Order total: <b>{amount} {currency}</b>",
         "order.info.view_status_hint": "💡 You can view your order status anytime using the /orders command.",
         "order.payment.bitcoin.address_title": "<b>Bitcoin Payment Address:</b>",
         "order.payment.bitcoin.admin_confirm": "• After payment, our admin will confirm your order",

@@ -1,5 +1,4 @@
 import json
-import pickle
 from typing import Optional, Any, Dict
 from redis.asyncio import Redis
 from functools import wraps
@@ -31,24 +30,20 @@ class CacheManager:
             if not deserialize:
                 return value
 
-            # Trying different ways of deserializing
+            # JSON-only deserialization. Never unpickle cache data: an attacker
+            # with write access to Redis could otherwise achieve RCE via pickle.loads.
             if isinstance(value, bytes):
-                # Try JSON first
                 try:
-                    decoded = value.decode('utf-8')
-                    return json.loads(decoded)
+                    return json.loads(value.decode('utf-8'))
                 except (UnicodeDecodeError, json.JSONDecodeError):
-                    # If not JSON, try pickle
-                    try:
-                        return pickle.loads(value)
-                    except Exception:
-                        logger.error(f"Failed to deserialize cache value for key {key}")
-                        return None
+                    # Corrupt or non-JSON payload -> treat as a cache miss.
+                    logger.error(f"Failed to deserialize cache value for key {key}")
+                    return None
             else:
-                # If there's already a line
+                # If there's already a string
                 try:
                     return json.loads(value)
-                except json.JSONDecodeError:
+                except (TypeError, json.JSONDecodeError):
                     return value
 
         except Exception as e:
@@ -70,7 +65,7 @@ class CacheManager:
                 await self.redis.setex(key, ttl, value)
                 return True
 
-            # Try serializing to JSON (more efficient)
+            # JSON-only serialization (no pickle — see get() for rationale).
             try:
                 serialized = json.dumps(value).encode('utf-8')
             except (TypeError, ValueError):
@@ -78,12 +73,8 @@ class CacheManager:
                 try:
                     serialized = json.dumps(value, default=str).encode('utf-8')
                 except (TypeError, ValueError):
-                    # If JSON still fails, use pickle
-                    try:
-                        serialized = pickle.dumps(value)
-                    except Exception:
-                        # If even pickle fails, convert to string as last resort
-                        serialized = str(value).encode('utf-8')
+                    # Last resort: store a plain string representation.
+                    serialized = str(value).encode('utf-8')
 
             await self.redis.setex(key, ttl, serialized)
             return True

@@ -346,7 +346,7 @@ async def finalize_order_and_payment(message: Message, state: FSMContext, user_i
                 if customer_info.delivery_note != delivery_note:
                     log_customer_info_change(
                         user_id, username, "DELIVERY_NOTE",
-                        customer_info.delivery_note, delivery_address
+                        customer_info.delivery_note, delivery_note
                     )
                     customer_info.delivery_note = delivery_note
 
@@ -372,177 +372,6 @@ async def finalize_order_and_payment(message: Message, state: FSMContext, user_i
 
     # Show payment method selection
     await show_payment_method_selection(message, state, user_id=user_id)
-
-
-async def process_bitcoin_payment(call: CallbackQuery, state: FSMContext):
-    """
-    Process Bitcoin payment from callback query
-    """
-    user_id = call.from_user.id
-
-    # Get real username from Telegram API
-    username = await get_telegram_username(user_id, call.bot)
-
-    # Get cart items
-    cart_items = await get_cart_items(user_id)
-
-    if not cart_items:
-        await call.answer(localize("cart.empty_alert"), show_alert=True)
-        return
-
-    # Calculate total
-    total_amount = await calculate_cart_total(user_id)
-
-    # Get Bitcoin address
-    btc_address = get_available_bitcoin_address()
-
-    if not btc_address:
-        await call.message.edit_text(
-            localize("order.payment.system_unavailable"),
-            reply_markup=back("back_to_menu")
-        )
-        return
-
-    # Get customer info
-    with Database().session() as session:
-        customer_info = session.query(CustomerInfo).filter_by(
-            telegram_id=user_id
-        ).first()
-
-        if not customer_info:
-            await call.answer(localize("order.payment.customer_not_found"), show_alert=True)
-            return
-
-        # Create one order for entire cart
-        try:
-            items_summary = []
-
-            # Create the main order
-            order = Order(
-                buyer_id=user_id,
-                total_price=Decimal(str(total_amount)),
-                payment_method="bitcoin",
-                delivery_address=customer_info.delivery_address,
-                phone_number=customer_info.phone_number,
-                delivery_note=customer_info.delivery_note or "",
-                bitcoin_address=btc_address,
-                order_status="pending"
-            )
-            session.add(order)
-            session.flush()  # Get the order ID
-
-            # Generate unique order code
-            order.order_code = generate_unique_order_code(session)
-
-            # Process each cart item and create OrderItems (Physical Goods - No ItemValues)
-            items_to_reserve = []
-            for cart_item in cart_items:
-                item_name = cart_item['item_name']
-                quantity = cart_item['quantity']
-                price = cart_item['price']
-
-                # Create OrderItem (no item_values field for physical goods)
-                order_item = OrderItem(
-                    order_id=order.id,
-                    item_name=item_name,
-                    price=Decimal(str(price)),
-                    quantity=quantity
-                )
-                session.add(order_item)
-
-                # Add to reservation list
-                items_to_reserve.append({
-                    'item_name': item_name,
-                    'quantity': quantity
-                })
-
-                items_summary.append(f"{item_name} x{quantity} = {cart_item['total']} {EnvKeys.PAY_CURRENCY}")
-
-            # Reserve inventory for 15 minutes
-            success, msg = reserve_inventory(order.id, items_to_reserve, session)
-            if not success:
-                session.rollback()
-                await call.message.edit_text(
-                    localize("order.inventory.unable_to_reserve", unavailable_items=msg),
-                    reply_markup=back("view_cart")
-                )
-                return
-
-            # Mark Bitcoin address as used with this order
-            mark_bitcoin_address_used(btc_address, user_id, username, order.id, session=session,
-                                      order_code=order.order_code)
-
-            # Log order creation
-            log_order_creation(
-                order_id=order.id,
-                buyer_id=user_id,
-                buyer_username=username,
-                items_summary="\n".join(items_summary),
-                total_price=float(total_amount),
-                payment_method="bitcoin",
-                delivery_address=customer_info.delivery_address,
-                phone_number=customer_info.phone_number,
-                bitcoin_address=btc_address,
-                order_code=order.order_code
-            )
-
-            # Clear cart
-            session.query(ShoppingCart).filter_by(user_id=user_id).delete()
-
-            session.commit()
-
-            # Send payment instructions to user
-            payment_text = (
-                    localize("order.payment.bitcoin.title") + "\n\n" +
-                    localize("order.payment.bitcoin.order_code", code=order.order_code) + "\n" +
-                    localize("order.payment.bitcoin.total_amount", amount=total_amount,
-                             currency=EnvKeys.PAY_CURRENCY) + "\n\n" +
-                    localize("order.payment.bitcoin.items_title") + "\n" +
-                    f"{chr(10).join(items_summary)}\n\n" +
-                    localize("order.payment.bitcoin.delivery_title") + "\n"
-                                                                       f"📍 Address: {customer_info.delivery_address}\n"
-                                                                       f"📞 Phone: {customer_info.phone_number}\n"
-            )
-
-            if customer_info.delivery_note:
-                payment_text += f"📝 Note: {customer_info.delivery_note}\n"
-
-            payment_text += (
-                    "\n" + localize("order.payment.bitcoin.address_title") + "\n"
-                                                                             f"<code>{btc_address}</code>\n\n" +
-                    localize("order.payment.bitcoin.important_title") + "\n" +
-                    localize("order.payment.bitcoin.send_exact") + "\n" +
-                    localize("order.payment.bitcoin.one_time_address") + "\n" +
-                    localize("order.payment.bitcoin.admin_confirm") + "\n\n" +
-                    localize("order.payment.bitcoin.need_help")
-            )
-
-            await call.message.edit_text(
-                payment_text,
-                reply_markup=back("back_to_menu")
-            )
-
-            # Notify admin
-            await notify_admin_new_order(
-                call.bot, order.order_code, user_id, username,
-                "\n".join(items_summary), total_amount, btc_address,
-                customer_info.delivery_address, customer_info.phone_number,
-                customer_info.delivery_note or ""
-            )
-
-            # Sync customer CSV
-            sync_customer_to_csv(user_id, username)
-
-            await state.clear()
-
-        except Exception as e:
-            session.rollback()
-            logger.error(f"Error creating orders: {e}")
-            await call.message.edit_text(
-                localize("order.payment.creation_error"),
-                reply_markup=back("view_cart")
-            )
-            return
 
 
 async def process_bitcoin_payment_new_message(message: Message, state: FSMContext, user_id: int = None):
@@ -572,16 +401,6 @@ async def process_bitcoin_payment_new_message(message: Message, state: FSMContex
     # Calculate final amount after bonus
     final_amount = total_amount - bonus_applied
 
-    # Get Bitcoin address
-    btc_address = get_available_bitcoin_address()
-
-    if not btc_address:
-        await message.answer(
-            localize("order.payment.system_unavailable"),
-            reply_markup=back("back_to_menu")
-        )
-        return
-
     # Get customer info
     with Database().session() as session:
         customer_info = session.query(CustomerInfo).filter_by(
@@ -592,6 +411,17 @@ async def process_bitcoin_payment_new_message(message: Message, state: FSMContex
             await message.answer(
                 localize("order.payment.customer_not_found"),
                 reply_markup=back("view_cart")
+            )
+            return
+
+        # Atomically pick and lock an unused Bitcoin address within this
+        # transaction (FOR UPDATE SKIP LOCKED), so two concurrent checkouts can
+        # never be assigned the same address.
+        btc_address = get_available_bitcoin_address(session=session)
+        if not btc_address:
+            await message.answer(
+                localize("order.payment.system_unavailable"),
+                reply_markup=back("back_to_menu")
             )
             return
 
@@ -1028,7 +858,7 @@ async def notify_admin_new_order(bot, order_code: str, buyer_id: int, buyer_user
                              currency=html.escape(EnvKeys.PAY_CURRENCY)) + "\n\n"
             )
         else:
-            admin_text += f"<b>Total: ${html.escape(str(total_amount))} {html.escape(EnvKeys.PAY_CURRENCY)}</b>\n\n"
+            admin_text += f"<b>Total: {html.escape(str(total_amount))} {html.escape(EnvKeys.PAY_CURRENCY)}</b>\n\n"
 
         admin_text += (
                 localize("order.payment.bitcoin.items_title") + "\n"
@@ -1090,7 +920,7 @@ async def notify_admin_new_cash_order(bot, order_code: str, buyer_id: int, buyer
                                  EnvKeys.PAY_CURRENCY)) + "\n\n"
             )
         else:
-            admin_text += f"<b>Amount to Collect: ${html.escape(str(total_amount))} {html.escape(EnvKeys.PAY_CURRENCY)}</b>\n\n"
+            admin_text += f"<b>Amount to Collect: {html.escape(str(total_amount))} {html.escape(EnvKeys.PAY_CURRENCY)}</b>\n\n"
 
         admin_text += (
                 localize("order.payment.bitcoin.items_title") + "\n"

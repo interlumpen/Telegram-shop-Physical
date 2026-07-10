@@ -70,7 +70,10 @@ services:
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
-      - ./btc_addresses.txt:/app/btc_addresses.txt:ro
+      # Must be writable: the bot removes an address from this file when it is
+      # assigned to an order and appends via the CLI/file-watcher. A read-only
+      # (:ro) mount makes Bitcoin address assignment fail at runtime.
+      - ./btc_addresses.txt:/app/btc_addresses.txt
     depends_on:
       db:
         condition: service_healthy

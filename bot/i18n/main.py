@@ -27,6 +27,11 @@ def localize(key: str, /, **kwargs: Any) -> str:
         text = key
 
     if kwargs:
+        # Make the configured currency available to every price string as
+        # {currency} so amounts render as e.g. "100 RUB" instead of a hardcoded
+        # "$100" (the fork's default currency is RUB, not USD). Explicit
+        # currency kwargs still take precedence.
+        kwargs.setdefault("currency", EnvKeys.PAY_CURRENCY)
         try:
             text = text.format(**kwargs)
         except (KeyError, ValueError, TypeError) as e:

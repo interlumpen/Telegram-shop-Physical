@@ -490,7 +490,20 @@ def register_models():
             return  # Success - exit function
 
         except OperationalError as e:
-            if "could not translate host name" in str(e) or "Temporary failure in name resolution" in str(e):
+            # Retry on transient startup errors: DNS not resolvable yet AND the
+            # DB accepting connections yet (compose brings Postgres up in parallel,
+            # so "connection refused" / "starting up" races are expected).
+            msg = str(e).lower()
+            transient_markers = (
+                "could not translate host name",
+                "temporary failure in name resolution",
+                "connection refused",
+                "could not connect to server",
+                "the database system is starting up",
+                "timeout expired",
+                "connection timed out",
+            )
+            if any(marker in msg for marker in transient_markers):
                 if attempt < max_retries:
                     wait_time = retry_delay * (2 ** (attempt - 1))  # Exponential backoff: 2s, 4s, 8s, 16s
                     logging.warning(

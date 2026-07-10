@@ -15,6 +15,7 @@ from bot.database.methods.read import get_bot_setting
 from bot.export.custom_logging import log_order_cancellation
 from bot.export.customer_csv import get_username_by_telegram_id, sync_customer_to_csv
 from bot.config import EnvKeys
+from bot.utils.money import format_price
 from bot.monitoring import get_metrics
 
 logger = logging.getLogger(__name__)
@@ -433,8 +434,8 @@ async def cleanup_expired_reservations() -> Tuple[int, List[str]]:
                                 notification_text = (
                                     f"⏱️ <b>Order Expired</b>\n\n"
                                     f"Your order <b>{order.order_code}</b> has expired due to payment timeout.\n\n"
-                                    f"💰 <b>Bonus Refund: ${order.bonus_applied}</b>\n"
-                                    f"📊 New Bonus Balance: <b>${new_bonus_balance}</b>\n\n"
+                                    f"💰 <b>Bonus Refund: {format_price(order.bonus_applied)}</b>\n"
+                                    f"📊 New Bonus Balance: <b>{format_price(new_bonus_balance)}</b>\n\n"
                                     f"Your referral bonus has been returned to your account.\n"
                                     f"You can use it for your next order!"
                                 )
@@ -449,9 +450,9 @@ async def cleanup_expired_reservations() -> Tuple[int, List[str]]:
                             # Continue execution even if notification fails
 
                         logger.info(
-                            f"Refunded bonus ${order.bonus_applied} to buyer {order.buyer_id} "
-                            f"(order: {order.order_code}, old balance: ${old_bonus_balance}, "
-                            f"new balance: ${new_bonus_balance})"
+                            f"Refunded bonus {order.bonus_applied} to buyer {order.buyer_id} "
+                            f"(order: {order.order_code}, old balance: {old_bonus_balance}, "
+                            f"new balance: {new_bonus_balance})"
                         )
 
                 # Get order items for logging

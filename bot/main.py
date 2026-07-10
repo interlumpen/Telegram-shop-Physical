@@ -95,8 +95,9 @@ async def __on_start_up(dp: Dispatcher, bot: Bot) -> None:
     dp.message.middleware(analytics_middleware)
     dp.callback_query.middleware(analytics_middleware)
 
-    # Add security middleware
-    security_middleware = SecurityMiddleware()
+    # Add security middleware. Use a stable secret so CSRF/replay tokens survive
+    # restarts; fall back to a random per-process key when SECRET_KEY is unset.
+    security_middleware = SecurityMiddleware(secret_key=EnvKeys.SECRET_KEY or None)
     auth_middleware = AuthenticationMiddleware()
 
     # First authentication, then security, then rate limiting

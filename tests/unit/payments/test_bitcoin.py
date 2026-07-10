@@ -90,6 +90,15 @@ class TestBitcoinAddressRetrieval:
         address = get_available_bitcoin_address()
         assert address is None
 
+    def test_get_available_bitcoin_address_with_session_locks(self, db_session, test_bitcoin_address):
+        """Selecting within a session (FOR UPDATE SKIP LOCKED path) returns the address.
+
+        This is the atomic pick-and-mark path used at checkout to prevent two
+        concurrent orders from being assigned the same address.
+        """
+        address = get_available_bitcoin_address(session=db_session)
+        assert address == test_bitcoin_address.address
+
 
 @pytest.mark.unit
 @pytest.mark.bitcoin

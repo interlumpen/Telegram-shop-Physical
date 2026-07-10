@@ -40,11 +40,51 @@ class RateLimiter:
         self.user_requests: Dict[int, list] = defaultdict(list)
         self.user_actions: Dict[str, Dict[int, list]] = defaultdict(lambda: defaultdict(list))
         self.banned_users: Dict[int, float] = {}
+        self._last_prune = time.time()
+        # How often to sweep idle users out of the tracking dicts (seconds).
+        self._prune_interval = 300
 
     def _clean_old_requests(self, requests: list, window: int) -> list:
         """Clears old requests outside the window"""
         current_time = time.time()
         return [req_time for req_time in requests if current_time - req_time < window]
+
+    def prune(self) -> None:
+        """Drop idle users from the tracking dicts to bound memory usage.
+
+        Without this, every user that ever touched the bot keeps an entry in
+        user_requests / user_actions forever (unbounded growth / memory leak).
+        """
+        now = time.time()
+        if now - self._last_prune < self._prune_interval:
+            return
+        self._last_prune = now
+
+        # Global request windows
+        for user_id in list(self.user_requests.keys()):
+            fresh = self._clean_old_requests(self.user_requests[user_id], self.config.global_window)
+            if fresh:
+                self.user_requests[user_id] = fresh
+            else:
+                del self.user_requests[user_id]
+
+        # Per-action windows
+        for action in list(self.user_actions.keys()):
+            _, window = self.config.action_limits.get(action, (0, self.config.global_window))
+            per_user = self.user_actions[action]
+            for user_id in list(per_user.keys()):
+                fresh = self._clean_old_requests(per_user[user_id], window)
+                if fresh:
+                    per_user[user_id] = fresh
+                else:
+                    del per_user[user_id]
+            if not per_user:
+                del self.user_actions[action]
+
+        # Expired bans
+        for user_id in list(self.banned_users.keys()):
+            if now - self.banned_users[user_id] > self.config.ban_duration:
+                del self.banned_users[user_id]
 
     def is_banned(self, user_id: int) -> bool:
         """Checks if the user is banned"""
@@ -110,14 +150,16 @@ class RateLimiter:
 
         if action and action in self.config.action_limits:
             limit, window = self.config.action_limits[action]
-            requests = self.user_actions[action][user_id]
+            # Read-only access: don't materialize empty defaultdict entries here.
+            requests = self.user_actions.get(action, {}).get(user_id, [])
             if len(requests) >= limit:
                 oldest_request = min(requests)
                 return int(window - (time.time() - oldest_request))
 
         # Global limit
-        if len(self.user_requests[user_id]) >= self.config.global_limit:
-            oldest_request = min(self.user_requests[user_id])
+        global_requests = self.user_requests.get(user_id, [])
+        if len(global_requests) >= self.config.global_limit:
+            oldest_request = min(global_requests)
             return int(self.config.global_window - (time.time() - oldest_request))
 
         return 0
@@ -130,13 +172,19 @@ class RateLimitMiddleware(BaseMiddleware):
         self.config = config or RateLimitConfig()
         self.limiter = RateLimiter(self.config)
         self.action_mapping = {
-            # Callback data -> action name
+            # Callback data prefix -> action name.
+            # Order placement in this physical shop happens at checkout_cart /
+            # payment_method_* (not the digital shop's "buy_"), so those are what
+            # the purchase limit must throttle.
             'broadcast': 'broadcast',
             'send_message': 'broadcast',
-            'buy_': 'buy_item',
+            'checkout_cart': 'buy_item',
+            'payment_method_': 'buy_item',
             'shop': 'shop_view',
             'category_': 'shop_view',
             'item_': 'shop_view',
+            'add_to_cart_': 'shop_view',
+            'view_cart': 'shop_view',
             'console': 'admin_action',
             'admin': 'admin_action',
         }
@@ -159,14 +207,20 @@ class RateLimitMiddleware(BaseMiddleware):
         return 'default'
 
     async def _check_admin_bypass(self, user_id: int) -> bool:
-        """Checks if the user is an admin"""
+        """Checks if the user has any administrative permission (non-blocking)."""
         if not self.config.admin_bypass:
             return False
 
         try:
-            from bot.database.methods import check_role
-            role = check_role(user_id)
-            return role > 1  # ADMIN or OWNER
+            from bot.database.methods import check_role, run_db
+            from bot.database.models.main import Permission
+            # Offload the sync DB read so we never block the event loop here.
+            perms = await run_db(check_role, user_id)
+            admin_mask = (
+                Permission.BROADCAST | Permission.SETTINGS_MANAGE | Permission.USERS_MANAGE
+                | Permission.SHOP_MANAGE | Permission.ADMINS_MANAGE | Permission.OWN
+            )
+            return bool(perms & admin_mask)
         except Exception:
             return False
 
@@ -189,6 +243,9 @@ class RateLimitMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         user_id = user.id
+
+        # Periodically sweep idle users out of the tracking dicts (bounded memory).
+        self.limiter.prune()
 
         # Checking the ban
         if self.limiter.is_banned(user_id):
