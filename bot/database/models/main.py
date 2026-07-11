@@ -463,30 +463,59 @@ class InventoryLog(Database.BASE):
         self.comment = comment
 
 
+class AuditLog(Database.BASE):
+    """Structured, queryable audit trail for critical/financial/admin actions.
+
+    Written alongside the rotating audit.log file (dual-write via log_audit()).
+    """
+    __tablename__ = 'audit_log'
+
+    id = Column(Integer, primary_key=True)
+    action = Column(String(100), nullable=False, index=True)
+    level = Column(String(16), nullable=False, default='INFO')  # INFO / WARNING / ERROR
+    user_id = Column(BigInteger, nullable=True, index=True)  # actor; not FK (may be system/None)
+    resource_type = Column(String(64), nullable=True)
+    resource_id = Column(String(128), nullable=True)
+    details = Column(Text, nullable=True)
+    ip_address = Column(String(64), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+
+    __table_args__ = (
+        Index('ix_audit_log_action_created', 'action', 'created_at'),
+        Index('ix_audit_log_user_created', 'user_id', 'created_at'),
+    )
+
+    def __init__(self, action: str, level: str = 'INFO', user_id: int = None,
+                 resource_type: str = None, resource_id: str = None,
+                 details: str = None, ip_address: str = None, **kw: Any):
+        super().__init__(**kw)
+        self.action = action
+        self.level = level
+        self.user_id = user_id
+        self.resource_type = resource_type
+        self.resource_id = resource_id
+        self.details = details
+        self.ip_address = ip_address
+
+
 def register_models():
-    """Create all database tables and insert default roles"""
+    """Apply database migrations and insert default roles."""
     import logging
     import time
     from sqlalchemy.exc import OperationalError
+    from bot.database.migrate import run_migrations
 
     max_retries = 5
     retry_delay = 2  # seconds
 
     for attempt in range(1, max_retries + 1):
         try:
-            db = Database()
-            logging.info(f"Creating database tables (attempt {attempt}/{max_retries})...")
-            Database.BASE.metadata.create_all(db.engine)
+            logging.info(f"Applying database migrations (attempt {attempt}/{max_retries})...")
+            run_migrations()
 
-            # Verify tables were created
-            from sqlalchemy import inspect
-            inspector = inspect(db.engine)
-            tables = inspector.get_table_names()
-            logging.info(f"Tables created successfully: {tables}")
-
-            # Insert default roles
+            # Insert / refresh default roles
             Role.insert_roles()
-            logging.info("Default roles inserted")
+            logging.info("Default roles ensured")
             return  # Success - exit function
 
         except OperationalError as e:

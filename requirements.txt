@@ -7,6 +7,9 @@ redis~=6.4.0
 # Database drivers
 psycopg2-binary~=2.9
 
+# Migrations
+alembic~=1.13
+
 # Validation & Security
 pydantic~=2.5.0
 python-dotenv~=1.0.0

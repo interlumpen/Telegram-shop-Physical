@@ -9,6 +9,12 @@ from datetime import datetime, timedelta, timezone
 # Add bot directory to Python path
 sys.path.insert(0, str(Path(__file__).parent))
 
+# Load .env BEFORE importing any bot.* module: EnvKeys validates required vars at
+# import time, so the CLI must populate the environment first.
+from dotenv import load_dotenv
+
+load_dotenv(encoding='utf-8')
+
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 
@@ -21,6 +27,8 @@ from bot.database.models.main import (
 from bot.database.methods.update import ban_user, unban_user
 from bot.database.methods.inventory import deduct_inventory, release_reservation, add_inventory, reserve_inventory
 from bot.database.methods.read import get_reference_bonus_percent
+from bot.database.methods.audit import log_audit, get_recent_audit_logs
+from bot.utils.money import format_price
 from bot.referrals.codes import create_reference_code, deactivate_reference_code
 from bot.payments.bitcoin import add_bitcoin_address, add_bitcoin_addresses_bulk, get_bitcoin_address_stats
 from bot.export.customer_csv import (
@@ -145,6 +153,14 @@ async def complete_order_by_code(order_code: str):
         order.order_status = 'completed'
         order.completed_at = datetime.now(timezone.utc)
 
+        log_audit(
+            "order_completed",
+            user_id=int(os.getenv('OWNER_ID', 0)) or None,
+            resource_type="Order", resource_id=order_code,
+            details=f"marked completed; total={order.total_price}",
+            session=session,
+        )
+
         # Update customer spendings
         update_customer_spendings(
             order.buyer_id,
@@ -195,9 +211,9 @@ async def complete_order_by_code(order_code: str):
                         notification_text = (
                             f"🎉 <b>Referral Bonus Received!</b>\n\n"
                             f"Your referral completed an order.\n\n"
-                            f"💰 <b>Bonus Amount: ${referral_bonus_amount}</b>\n"
-                            f"📊 Total Bonus Balance: <b>${total_bonus_balance}</b>\n\n"
-                            f"Order Total: ${order.total_price}\n"
+                            f"💰 <b>Bonus Amount: {format_price(referral_bonus_amount)}</b>\n"
+                            f"📊 Total Bonus Balance: <b>{format_price(total_bonus_balance)}</b>\n\n"
+                            f"Order Total: {format_price(order.total_price)}\n"
                             f"Order Code: {order.order_code}\n\n"
                             f"💡 You can use this bonus to reduce payment on your next order!"
                         )
@@ -213,7 +229,7 @@ async def complete_order_by_code(order_code: str):
                     print(f"⚠️  Failed to send referral bonus notification: {e}")
                     # Continue execution even if notification fails
 
-                print(f"💰 Referral bonus: ${referral_bonus_amount} credited to referrer (ID: {buyer.referral_id})")
+                print(f"💰 Referral bonus: {format_price(referral_bonus_amount)} credited to referrer (ID: {buyer.referral_id})")
 
         session.commit()
 
@@ -241,10 +257,10 @@ async def complete_order_by_code(order_code: str):
 
         print(f"✅ Order {order_code} completed successfully")
         print(f"   Customer: @{buyer_username} (ID: {order.buyer_id})")
-        print(f"   Total: ${order.total_price}")
+        print(f"   Total: {format_price(order.total_price)}")
         print(f"   Payment Method: {order.payment_method}")
         if referral_bonus_amount > 0:
-            print(f"   Referral Bonus: ${referral_bonus_amount}")
+            print(f"   Referral Bonus: {format_price(referral_bonus_amount)}")
 
 
 async def cancel_order_by_code(order_code: str):
@@ -289,6 +305,14 @@ async def cancel_order_by_code(order_code: str):
         # Mark order as canceled
         order.order_status = 'canceled'
 
+        log_audit(
+            "order_canceled",
+            user_id=int(os.getenv('OWNER_ID', 0)) or None,
+            resource_type="Order", resource_id=order_code,
+            details=f"canceled by admin; total={order.total_price}",
+            session=session,
+        )
+
         # Refund referral bonus if it was applied
         bonus_refunded = False
         if order.bonus_applied and order.bonus_applied > 0:
@@ -302,9 +326,9 @@ async def cancel_order_by_code(order_code: str):
                 new_bonus_balance = customer_info.bonus_balance
                 bonus_refunded = True
 
-                print(f"💰 Refunded bonus: ${order.bonus_applied}")
-                print(f"   Previous bonus balance: ${old_bonus_balance}")
-                print(f"   New bonus balance: ${new_bonus_balance}")
+                print(f"💰 Refunded bonus: {format_price(order.bonus_applied)}")
+                print(f"   Previous bonus balance: {format_price(old_bonus_balance)}")
+                print(f"   New bonus balance: {format_price(new_bonus_balance)}")
                 print(f"   Buyer ID: {order.buyer_id}")
                 print(f"   Order code: {order.order_code}")
 
@@ -322,8 +346,8 @@ async def cancel_order_by_code(order_code: str):
                         notification_text = (
                             f"ℹ️ <b>Order Canceled</b>\n\n"
                             f"Your order <b>{order.order_code}</b> has been canceled by admin.\n\n"
-                            f"💰 <b>Bonus Refund: ${order.bonus_applied}</b>\n"
-                            f"📊 New Bonus Balance: <b>${new_bonus_balance}</b>\n\n"
+                            f"💰 <b>Bonus Refund: {format_price(order.bonus_applied)}</b>\n"
+                            f"📊 New Bonus Balance: <b>{format_price(new_bonus_balance)}</b>\n\n"
                             f"Your referral bonus has been returned to your account.\n"
                             f"You can use it for your next order!"
                         )
@@ -368,7 +392,7 @@ async def cancel_order_by_code(order_code: str):
 
         print(f"✅ Order {order_code} canceled successfully")
         print(f"   Customer: @{buyer_username} (ID: {order.buyer_id})")
-        print(f"   Total: ${order.total_price}")
+        print(f"   Total: {format_price(order.total_price)}")
         print(f"   Payment Method: {order.payment_method}")
 
 
@@ -417,6 +441,14 @@ async def confirm_order_with_delivery_time(order_code: str, delivery_time_str: s
         if order.reserved_until and order.reserved_until < datetime.now(timezone.utc) + timedelta(hours=1):
             order.reserved_until = delivery_time + timedelta(hours=1)
 
+        log_audit(
+            "order_confirmed",
+            user_id=int(os.getenv('OWNER_ID', 0)) or None,
+            resource_type="Order", resource_id=order_code,
+            details=f"{old_status} -> confirmed; delivery_time={delivery_time_str}",
+            session=session,
+        )
+
         session.commit()
 
         # Get order items for notification
@@ -442,7 +474,7 @@ async def confirm_order_with_delivery_time(order_code: str, delivery_time_str: s
         print(f"   Status: {old_status} -> confirmed")
         print(f"   Delivery time: {delivery_time.strftime('%Y-%m-%d %H:%M')}")
         print(f"   Customer ID: {order.buyer_id}")
-        print(f"   Total: ${order.total_price}")
+        print(f"   Total: {format_price(order.total_price)}")
 
 
 async def mark_order_delivered(order_code: str):
@@ -490,6 +522,14 @@ async def mark_order_delivered(order_code: str):
         old_status = order.order_status
         order.order_status = 'delivered'
         order.completed_at = datetime.now(timezone.utc)
+
+        log_audit(
+            "order_delivered",
+            user_id=int(os.getenv('OWNER_ID', 0)) or None,
+            resource_type="Order", resource_id=order_code,
+            details=f"{old_status} -> delivered; total={order.total_price}",
+            session=session,
+        )
 
         # Update customer spendings
         update_customer_spendings(
@@ -542,9 +582,9 @@ async def mark_order_delivered(order_code: str):
                         notification_text = (
                             f"🎉 <b>Referral Bonus Received!</b>\n\n"
                             f"Your referral completed an order.\n\n"
-                            f"💰 <b>Bonus Amount: ${referral_bonus_amount}</b>\n"
-                            f"📊 Total Bonus Balance: <b>${total_bonus_balance}</b>\n\n"
-                            f"Order Total: ${order.total_price}\n"
+                            f"💰 <b>Bonus Amount: {format_price(referral_bonus_amount)}</b>\n"
+                            f"📊 Total Bonus Balance: <b>{format_price(total_bonus_balance)}</b>\n\n"
+                            f"Order Total: {format_price(order.total_price)}\n"
                             f"Order Code: {order.order_code}\n\n"
                             f"💡 You can use this bonus to reduce payment on your next order!"
                         )
@@ -556,7 +596,7 @@ async def mark_order_delivered(order_code: str):
                 except Exception as e:
                     print(f"⚠️  Failed to send referral bonus notification: {e}")
 
-                print(f"💰 Referral bonus: ${referral_bonus_amount} credited to referrer (ID: {buyer.referral_id})")
+                print(f"💰 Referral bonus: {format_price(referral_bonus_amount)} credited to referrer (ID: {buyer.referral_id})")
 
         session.commit()
 
@@ -595,10 +635,10 @@ async def mark_order_delivered(order_code: str):
         print(f"✅ Order {order_code} marked as delivered")
         print(f"   Status: {old_status} → delivered")
         print(f"   Customer: @{buyer_username} (ID: {order.buyer_id})")
-        print(f"   Total: ${order.total_price}")
+        print(f"   Total: {format_price(order.total_price)}")
         print(f"   Payment Method: {order.payment_method}")
         if referral_bonus_amount > 0:
-            print(f"   Referral Bonus: ${referral_bonus_amount}")
+            print(f"   Referral Bonus: {format_price(referral_bonus_amount)}")
 
 
 async def add_item_to_order(order_code: str, item_name: str, quantity: int, notify: bool = False):
@@ -668,7 +708,7 @@ async def add_item_to_order(order_code: str, item_name: str, quantity: int, noti
 
         # Send notification if requested
         if notify:
-            changes_desc = f"+ {item_name} x {quantity} (${goods.price * quantity})"
+            changes_desc = f"+ {item_name} x {quantity} ({format_price(goods.price * quantity)})"
             try:
                 await notify_order_modified(
                     order=order,
@@ -679,8 +719,8 @@ async def add_item_to_order(order_code: str, item_name: str, quantity: int, noti
                 print(f"⚠️  Failed to send notification: {e}")
 
         print(f"✅ Added {quantity}x {item_name} to order {order_code}")
-        print(f"   Item price: ${goods.price}")
-        print(f"   New order total: ${order.total_price}")
+        print(f"   Item price: {format_price(goods.price)}")
+        print(f"   New order total: {format_price(order.total_price)}")
 
 
 async def remove_item_from_order(order_code: str, item_name: str, quantity: int, notify: bool = False):
@@ -742,7 +782,7 @@ async def remove_item_from_order(order_code: str, item_name: str, quantity: int,
 
         # Send notification if requested
         if notify:
-            changes_desc = f"- {item_name} x {quantity} (-${removed_value})"
+            changes_desc = f"- {item_name} x {quantity} (-{format_price(removed_value)})"
             try:
                 await notify_order_modified(
                     order=order,
@@ -753,8 +793,8 @@ async def remove_item_from_order(order_code: str, item_name: str, quantity: int,
                 print(f"⚠️  Failed to send notification: {e}")
 
         print(f"✅ Removed {quantity}x {item_name} from order {order_code}")
-        print(f"   Value removed: ${removed_value}")
-        print(f"   New order total: ${order.total_price}")
+        print(f"   Value removed: {format_price(removed_value)}")
+        print(f"   New order total: {format_price(order.total_price)}")
 
 
 async def update_delivery_time(order_code: str, delivery_time_str: str, notify: bool = False):
@@ -845,6 +885,12 @@ def create_refcode(args):
             note=args.note
         )
 
+        log_audit(
+            "refcode_created", user_id=created_by,
+            resource_type="ReferenceCode", resource_id=code,
+            details=f"expires_hours={expires_in_hours}; max_uses={max_uses}; note={args.note or ''}",
+        )
+
         print(f"✅ Reference code created: {code}")
         if expires_in_hours:
             print(f"   Expires in: {expires_in_hours} hours")
@@ -879,6 +925,11 @@ def disable_refcode(args):
     )
 
     if success:
+        log_audit(
+            "refcode_disabled", level="WARNING", user_id=admin_id,
+            resource_type="ReferenceCode", resource_id=args.code,
+            details=f"reason={args.reason or 'Disabled via CLI'}",
+        )
         print(f"✅ Reference code {args.code} has been disabled")
     else:
         print(f"❌ Reference code {args.code} not found")
@@ -1059,6 +1110,13 @@ def update_inventory(args):
             method='CLI'
         )
 
+        log_audit(
+            "inventory_updated", user_id=admin_id or None,
+            resource_type="Goods", resource_id=args.item_name,
+            details=f"stock {current_stock} -> {final_stock} (CLI)",
+            session=session,
+        )
+
         print(f"✅ Inventory updated for '{args.item_name}'")
         print(f"   Old stock: {current_stock}")
         print(f"   New stock: {final_stock}")
@@ -1212,6 +1270,12 @@ async def ban_user_cli(args):
         # Get username
         username = await get_telegram_username(user_id)
 
+        log_audit(
+            "user_banned", level="WARNING", user_id=admin_id,
+            resource_type="User", resource_id=user_id,
+            details=f"reason={reason}",
+        )
+
         print(f"✅ User banned successfully")
         print(f"   User: @{username} (ID: {user_id})")
         print(f"   Reason: {reason}")
@@ -1264,6 +1328,11 @@ async def unban_user_cli(args):
     if success:
         # Get username
         username = await get_telegram_username(user_id)
+
+        log_audit(
+            "user_unbanned", user_id=get_admin_user_id(),
+            resource_type="User", resource_id=user_id,
+        )
 
         print(f"✅ User unbanned successfully")
         print(f"   User: @{username} (ID: {user_id})")
@@ -1443,6 +1512,27 @@ def main():
         asyncio.run(unban_user_cli(args))
 
     unban_parser.set_defaults(func=handle_unban)
+
+    # Audit log query
+    audit_parser = subparsers.add_parser('audit', help='View the audit log')
+    audit_parser.add_argument('--limit', type=int, default=50, help='Max entries to show (default 50)')
+    audit_parser.add_argument('--action', help='Filter by action name (e.g. order_delivered)')
+    audit_parser.add_argument('--user', type=int, help='Filter by actor user id')
+
+    def handle_audit(args):
+        rows = get_recent_audit_logs(limit=args.limit, action=args.action, user_id=args.user)
+        if not rows:
+            print("No audit entries found.")
+            return
+        print(f"{'Time (UTC)':<20} {'Level':<8} {'Action':<20} {'User':<12} {'Resource':<24} Details")
+        print("-" * 110)
+        for r in rows:
+            ts = r['created_at'].strftime('%Y-%m-%d %H:%M:%S') if r['created_at'] else '-'
+            resource = f"{r['resource_type'] or ''}:{r['resource_id'] or ''}".strip(':')
+            print(f"{ts:<20} {r['level']:<8} {r['action']:<20} {str(r['user_id'] or '-'):<12} "
+                  f"{resource:<24} {r['details'] or ''}")
+
+    audit_parser.set_defaults(func=handle_audit)
 
     # Parse arguments
     args = parser.parse_args()

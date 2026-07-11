@@ -132,10 +132,24 @@ class SecurityMiddleware(BaseMiddleware):
 
             # Checking critical actions
             if self.is_critical_action(event.data):
-                # Logging a critical action
+                # Logging a critical action (file audit)
                 audit_logger.info(
                     f"Critical action: user={user.id}, action={event.data[:50]}"
                 )
+                # Persist to the audit_log DB table too — non-blocking and
+                # best-effort so it never delays or breaks the handler.
+                try:
+                    from bot.database.methods import run_db, log_audit
+                    from bot.database.methods.cache_utils import safe_create_task
+                    safe_create_task(run_db(
+                        log_audit,
+                        "critical_callback",
+                        user_id=user.id,
+                        resource_type="callback",
+                        resource_id=event.data[:120],
+                    ))
+                except Exception:
+                    pass
 
                 # Check that the callback is not too old (protection against replay attacks)
                 if hasattr(event.message, 'date'):
@@ -269,8 +283,10 @@ class AuthenticationMiddleware(BaseMiddleware):
                 return role
 
         # Download from DB
-        from bot.database.methods import check_role
-        role = check_role(user_id) or 0
+        from bot.database.methods import check_role, run_db
+        # Offload the sync DB read so we don't block the event loop on every
+        # admin callback.
+        role = await run_db(check_role, user_id) or 0
 
         # Refresh cache
         self.admin_cache[user_id] = (role, time.time())

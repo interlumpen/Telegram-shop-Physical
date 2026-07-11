@@ -232,16 +232,12 @@ async def view_order_details(call: CallbackQuery, state: FSMContext):
 
         text += localize("myorders.detail.items", items=items_text)
 
-        delivery_info = (
-                f"📍 Address: {order.delivery_address}\n" +
-                f"📞 Phone: {order.phone_number}\n"
+        text += localize(
+            "myorders.detail.delivery_info",
+            address=localize("cart.delivery_address", address=order.delivery_address).rstrip("\n"),
+            phone=localize("cart.delivery_phone", phone=order.phone_number).rstrip("\n"),
+            note=localize("cart.delivery_note", note=order.delivery_note).rstrip("\n") if order.delivery_note else "",
         )
-        if order.delivery_note:
-            delivery_info += f"📝 Note: {order.delivery_note}\n"
-
-        text += localize("myorders.detail.delivery_info", address=f"📍 Address: {order.delivery_address}",
-                         phone=f"📞 Phone: {order.phone_number}",
-                         note=f"📝 Note: {order.delivery_note}" if order.delivery_note else "")
 
         # Show payment info based on payment method and status
         if order.order_status in ('reserved', 'pending'):

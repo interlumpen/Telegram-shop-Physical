@@ -559,13 +559,13 @@ async def process_bitcoin_payment_new_message(message: Message, state: FSMContex
             payment_text += (
                     localize("order.payment.bitcoin.items_title") + "\n"
                                                                     f"{chr(10).join(items_summary)}\n\n" +
-                    localize("order.payment.bitcoin.delivery_title") + "\n"
-                                                                       f"📍 Address: {customer_info.delivery_address}\n"
-                                                                       f"📞 Phone: {customer_info.phone_number}\n"
+                    localize("order.payment.bitcoin.delivery_title") + "\n" +
+                    localize("cart.delivery_address", address=customer_info.delivery_address) +
+                    localize("cart.delivery_phone", phone=customer_info.phone_number)
             )
 
             if customer_info.delivery_note:
-                payment_text += f"📝 Note: {customer_info.delivery_note}\n"
+                payment_text += localize("cart.delivery_note", note=customer_info.delivery_note)
 
             payment_text += (
                     "\n" + localize("order.payment.bitcoin.address_title") + "\n"
@@ -786,13 +786,13 @@ async def process_cash_payment_new_message(message: Message, state: FSMContext, 
             payment_text += (
                     localize("order.payment.bitcoin.items_title") + "\n"
                                                                     f"{chr(10).join(items_summary)}\n\n" +
-                    localize("order.payment.bitcoin.delivery_title") + "\n"
-                                                                       f"📍 Address: {customer_info.delivery_address}\n"
-                                                                       f"📞 Phone: {customer_info.phone_number}\n"
+                    localize("order.payment.bitcoin.delivery_title") + "\n" +
+                    localize("cart.delivery_address", address=customer_info.delivery_address) +
+                    localize("cart.delivery_phone", phone=customer_info.phone_number)
             )
 
             if customer_info.delivery_note:
-                payment_text += f"📝 Note: {customer_info.delivery_note}\n"
+                payment_text += localize("cart.delivery_note", note=customer_info.delivery_note)
 
             payment_text += (
                     "\n" + localize("order.info.view_status_hint")
@@ -858,21 +858,21 @@ async def notify_admin_new_order(bot, order_code: str, buyer_id: int, buyer_user
                              currency=html.escape(EnvKeys.PAY_CURRENCY)) + "\n\n"
             )
         else:
-            admin_text += f"<b>Total: {html.escape(str(total_amount))} {html.escape(EnvKeys.PAY_CURRENCY)}</b>\n\n"
+            admin_text += localize("admin.order.total_label", amount=html.escape(str(total_amount)))
 
         admin_text += (
                 localize("order.payment.bitcoin.items_title") + "\n"
                                                                 f"{html.escape(items_summary)}\n\n" +
-                localize("order.payment.bitcoin.delivery_title") + "\n"
-                                                                   f"📍 Address: {html.escape(delivery_address)}\n"
-                                                                   f"📞 Phone: {html.escape(phone_number)}\n"
+                localize("order.payment.bitcoin.delivery_title") + "\n" +
+                localize("cart.delivery_address", address=html.escape(delivery_address)) +
+                localize("cart.delivery_phone", phone=html.escape(phone_number))
         )
 
         if delivery_note:
-            admin_text += f"📝 Note: {html.escape(delivery_note)}\n"
+            admin_text += localize("cart.delivery_note", note=html.escape(delivery_note))
 
         admin_text += (
-                f"\n<b>Payment:</b>\n" +
+                localize("admin.order.payment_header") +
                 localize("admin.order.bitcoin_address_label", address=html.escape(btc_address)) + "\n\n" +
                 localize("admin.order.awaiting_payment_status")
         )
@@ -920,18 +920,18 @@ async def notify_admin_new_cash_order(bot, order_code: str, buyer_id: int, buyer
                                  EnvKeys.PAY_CURRENCY)) + "\n\n"
             )
         else:
-            admin_text += f"<b>Amount to Collect: {html.escape(str(total_amount))} {html.escape(EnvKeys.PAY_CURRENCY)}</b>\n\n"
+            admin_text += localize("admin.order.amount_to_collect_label", amount=html.escape(str(total_amount))) + "\n\n"
 
         admin_text += (
                 localize("order.payment.bitcoin.items_title") + "\n"
                                                                 f"{html.escape(items_summary)}\n\n" +
-                localize("order.payment.bitcoin.delivery_title") + "\n"
-                                                                   f"📍 Address: {html.escape(delivery_address)}\n"
-                                                                   f"📞 Phone: {html.escape(phone_number)}\n"
+                localize("order.payment.bitcoin.delivery_title") + "\n" +
+                localize("cart.delivery_address", address=html.escape(delivery_address)) +
+                localize("cart.delivery_phone", phone=html.escape(phone_number))
         )
 
         if delivery_note:
-            admin_text += f"📝 Note: {html.escape(delivery_note)}\n"
+            admin_text += localize("cart.delivery_note", note=html.escape(delivery_note))
 
         admin_text += (
                 "\n" + localize("admin.order.action_required_title") + "\n" +
