@@ -9,6 +9,12 @@ from datetime import datetime, timedelta, timezone
 # Add bot directory to Python path
 sys.path.insert(0, str(Path(__file__).parent))
 
+# Load .env BEFORE importing any bot.* module: EnvKeys validates required vars at
+# import time, so the CLI must populate the environment first.
+from dotenv import load_dotenv
+
+load_dotenv(encoding='utf-8')
+
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 
@@ -21,6 +27,8 @@ from bot.database.models.main import (
 from bot.database.methods.update import ban_user, unban_user
 from bot.database.methods.inventory import deduct_inventory, release_reservation, add_inventory, reserve_inventory
 from bot.database.methods.read import get_reference_bonus_percent
+from bot.database.methods.audit import log_audit, get_recent_audit_logs
+from bot.utils.money import format_price
 from bot.referrals.codes import create_reference_code, deactivate_reference_code
 from bot.payments.bitcoin import add_bitcoin_address, add_bitcoin_addresses_bulk, get_bitcoin_address_stats
 from bot.export.customer_csv import (
@@ -35,7 +43,7 @@ from bot.export.custom_logging import (
     log_order_cancellation,
     log_inventory_update
 )
-from bot.config import timezone, EnvKeys
+from bot.config import timezone as tz_config, EnvKeys
 
 from bot.payments.notifications import (
     notify_order_confirmed,
@@ -145,6 +153,14 @@ async def complete_order_by_code(order_code: str):
         order.order_status = 'completed'
         order.completed_at = datetime.now(timezone.utc)
 
+        log_audit(
+            "order_completed",
+            user_id=int(os.getenv('OWNER_ID', 0)) or None,
+            resource_type="Order", resource_id=order_code,
+            details=f"marked completed; total={order.total_price}",
+            session=session,
+        )
+
         # Update customer spendings
         update_customer_spendings(
             order.buyer_id,
@@ -195,9 +211,9 @@ async def complete_order_by_code(order_code: str):
                         notification_text = (
                             f"🎉 <b>Referral Bonus Received!</b>\n\n"
                             f"Your referral completed an order.\n\n"
-                            f"💰 <b>Bonus Amount: ${referral_bonus_amount}</b>\n"
-                            f"📊 Total Bonus Balance: <b>${total_bonus_balance}</b>\n\n"
-                            f"Order Total: ${order.total_price}\n"
+                            f"💰 <b>Bonus Amount: {format_price(referral_bonus_amount)}</b>\n"
+                            f"📊 Total Bonus Balance: <b>{format_price(total_bonus_balance)}</b>\n\n"
+                            f"Order Total: {format_price(order.total_price)}\n"
                             f"Order Code: {order.order_code}\n\n"
                             f"💡 You can use this bonus to reduce payment on your next order!"
                         )
@@ -213,7 +229,7 @@ async def complete_order_by_code(order_code: str):
                     print(f"⚠️  Failed to send referral bonus notification: {e}")
                     # Continue execution even if notification fails
 
-                print(f"💰 Referral bonus: ${referral_bonus_amount} credited to referrer (ID: {buyer.referral_id})")
+                print(f"💰 Referral bonus: {format_price(referral_bonus_amount)} credited to referrer (ID: {buyer.referral_id})")
 
         session.commit()
 
@@ -241,10 +257,10 @@ async def complete_order_by_code(order_code: str):
 
         print(f"✅ Order {order_code} completed successfully")
         print(f"   Customer: @{buyer_username} (ID: {order.buyer_id})")
-        print(f"   Total: ${order.total_price}")
+        print(f"   Total: {format_price(order.total_price)}")
         print(f"   Payment Method: {order.payment_method}")
         if referral_bonus_amount > 0:
-            print(f"   Referral Bonus: ${referral_bonus_amount}")
+            print(f"   Referral Bonus: {format_price(referral_bonus_amount)}")
 
 
 async def cancel_order_by_code(order_code: str):
@@ -289,6 +305,14 @@ async def cancel_order_by_code(order_code: str):
         # Mark order as canceled
         order.order_status = 'canceled'
 
+        log_audit(
+            "order_canceled",
+            user_id=int(os.getenv('OWNER_ID', 0)) or None,
+            resource_type="Order", resource_id=order_code,
+            details=f"canceled by admin; total={order.total_price}",
+            session=session,
+        )
+
         # Refund referral bonus if it was applied
         bonus_refunded = False
         if order.bonus_applied and order.bonus_applied > 0:
@@ -302,9 +326,9 @@ async def cancel_order_by_code(order_code: str):
                 new_bonus_balance = customer_info.bonus_balance
                 bonus_refunded = True
 
-                print(f"💰 Refunded bonus: ${order.bonus_applied}")
-                print(f"   Previous bonus balance: ${old_bonus_balance}")
-                print(f"   New bonus balance: ${new_bonus_balance}")
+                print(f"💰 Refunded bonus: {format_price(order.bonus_applied)}")
+                print(f"   Previous bonus balance: {format_price(old_bonus_balance)}")
+                print(f"   New bonus balance: {format_price(new_bonus_balance)}")
                 print(f"   Buyer ID: {order.buyer_id}")
                 print(f"   Order code: {order.order_code}")
 
@@ -322,8 +346,8 @@ async def cancel_order_by_code(order_code: str):
                         notification_text = (
                             f"ℹ️ <b>Order Canceled</b>\n\n"
                             f"Your order <b>{order.order_code}</b> has been canceled by admin.\n\n"
-                            f"💰 <b>Bonus Refund: ${order.bonus_applied}</b>\n"
-                            f"📊 New Bonus Balance: <b>${new_bonus_balance}</b>\n\n"
+                            f"💰 <b>Bonus Refund: {format_price(order.bonus_applied)}</b>\n"
+                            f"📊 New Bonus Balance: <b>{format_price(new_bonus_balance)}</b>\n\n"
                             f"Your referral bonus has been returned to your account.\n"
                             f"You can use it for your next order!"
                         )
@@ -368,7 +392,7 @@ async def cancel_order_by_code(order_code: str):
 
         print(f"✅ Order {order_code} canceled successfully")
         print(f"   Customer: @{buyer_username} (ID: {order.buyer_id})")
-        print(f"   Total: ${order.total_price}")
+        print(f"   Total: {format_price(order.total_price)}")
         print(f"   Payment Method: {order.payment_method}")
 
 
@@ -417,6 +441,14 @@ async def confirm_order_with_delivery_time(order_code: str, delivery_time_str: s
         if order.reserved_until and order.reserved_until < datetime.now(timezone.utc) + timedelta(hours=1):
             order.reserved_until = delivery_time + timedelta(hours=1)
 
+        log_audit(
+            "order_confirmed",
+            user_id=int(os.getenv('OWNER_ID', 0)) or None,
+            resource_type="Order", resource_id=order_code,
+            details=f"{old_status} -> confirmed; delivery_time={delivery_time_str}",
+            session=session,
+        )
+
         session.commit()
 
         # Get order items for notification
@@ -442,7 +474,7 @@ async def confirm_order_with_delivery_time(order_code: str, delivery_time_str: s
         print(f"   Status: {old_status} -> confirmed")
         print(f"   Delivery time: {delivery_time.strftime('%Y-%m-%d %H:%M')}")
         print(f"   Customer ID: {order.buyer_id}")
-        print(f"   Total: ${order.total_price}")
+        print(f"   Total: {format_price(order.total_price)}")
 
 
 async def mark_order_delivered(order_code: str):
@@ -490,6 +522,14 @@ async def mark_order_delivered(order_code: str):
         old_status = order.order_status
         order.order_status = 'delivered'
         order.completed_at = datetime.now(timezone.utc)
+
+        log_audit(
+            "order_delivered",
+            user_id=int(os.getenv('OWNER_ID', 0)) or None,
+            resource_type="Order", resource_id=order_code,
+            details=f"{old_status} -> delivered; total={order.total_price}",
+            session=session,
+        )
 
         # Update customer spendings
         update_customer_spendings(
@@ -542,9 +582,9 @@ async def mark_order_delivered(order_code: str):
                         notification_text = (
                             f"🎉 <b>Referral Bonus Received!</b>\n\n"
                             f"Your referral completed an order.\n\n"
-                            f"💰 <b>Bonus Amount: ${referral_bonus_amount}</b>\n"
-                            f"📊 Total Bonus Balance: <b>${total_bonus_balance}</b>\n\n"
-                            f"Order Total: ${order.total_price}\n"
+                            f"💰 <b>Bonus Amount: {format_price(referral_bonus_amount)}</b>\n"
+                            f"📊 Total Bonus Balance: <b>{format_price(total_bonus_balance)}</b>\n\n"
+                            f"Order Total: {format_price(order.total_price)}\n"
                             f"Order Code: {order.order_code}\n\n"
                             f"💡 You can use this bonus to reduce payment on your next order!"
                         )
@@ -556,7 +596,7 @@ async def mark_order_delivered(order_code: str):
                 except Exception as e:
                     print(f"⚠️  Failed to send referral bonus notification: {e}")
 
-                print(f"💰 Referral bonus: ${referral_bonus_amount} credited to referrer (ID: {buyer.referral_id})")
+                print(f"💰 Referral bonus: {format_price(referral_bonus_amount)} credited to referrer (ID: {buyer.referral_id})")
 
         session.commit()
 
@@ -595,10 +635,10 @@ async def mark_order_delivered(order_code: str):
         print(f"✅ Order {order_code} marked as delivered")
         print(f"   Status: {old_status} → delivered")
         print(f"   Customer: @{buyer_username} (ID: {order.buyer_id})")
-        print(f"   Total: ${order.total_price}")
+        print(f"   Total: {format_price(order.total_price)}")
         print(f"   Payment Method: {order.payment_method}")
         if referral_bonus_amount > 0:
-            print(f"   Referral Bonus: ${referral_bonus_amount}")
+            print(f"   Referral Bonus: {format_price(referral_bonus_amount)}")
 
 
 async def add_item_to_order(order_code: str, item_name: str, quantity: int, notify: bool = False):
@@ -668,7 +708,7 @@ async def add_item_to_order(order_code: str, item_name: str, quantity: int, noti
 
         # Send notification if requested
         if notify:
-            changes_desc = f"+ {item_name} x {quantity} (${goods.price * quantity})"
+            changes_desc = f"+ {item_name} x {quantity} ({format_price(goods.price * quantity)})"
             try:
                 await notify_order_modified(
                     order=order,
@@ -679,8 +719,8 @@ async def add_item_to_order(order_code: str, item_name: str, quantity: int, noti
                 print(f"⚠️  Failed to send notification: {e}")
 
         print(f"✅ Added {quantity}x {item_name} to order {order_code}")
-        print(f"   Item price: ${goods.price}")
-        print(f"   New order total: ${order.total_price}")
+        print(f"   Item price: {format_price(goods.price)}")
+        print(f"   New order total: {format_price(order.total_price)}")
 
 
 async def remove_item_from_order(order_code: str, item_name: str, quantity: int, notify: bool = False):
@@ -742,7 +782,7 @@ async def remove_item_from_order(order_code: str, item_name: str, quantity: int,
 
         # Send notification if requested
         if notify:
-            changes_desc = f"- {item_name} x {quantity} (-${removed_value})"
+            changes_desc = f"- {item_name} x {quantity} (-{format_price(removed_value)})"
             try:
                 await notify_order_modified(
                     order=order,
@@ -753,8 +793,8 @@ async def remove_item_from_order(order_code: str, item_name: str, quantity: int,
                 print(f"⚠️  Failed to send notification: {e}")
 
         print(f"✅ Removed {quantity}x {item_name} from order {order_code}")
-        print(f"   Value removed: ${removed_value}")
-        print(f"   New order total: ${order.total_price}")
+        print(f"   Value removed: {format_price(removed_value)}")
+        print(f"   New order total: {format_price(order.total_price)}")
 
 
 async def update_delivery_time(order_code: str, delivery_time_str: str, notify: bool = False):
@@ -845,6 +885,12 @@ def create_refcode(args):
             note=args.note
         )
 
+        log_audit(
+            "refcode_created", user_id=created_by,
+            resource_type="ReferenceCode", resource_id=code,
+            details=f"expires_hours={expires_in_hours}; max_uses={max_uses}; note={args.note or ''}",
+        )
+
         print(f"✅ Reference code created: {code}")
         if expires_in_hours:
             print(f"   Expires in: {expires_in_hours} hours")
@@ -879,6 +925,11 @@ def disable_refcode(args):
     )
 
     if success:
+        log_audit(
+            "refcode_disabled", level="WARNING", user_id=admin_id,
+            resource_type="ReferenceCode", resource_id=args.code,
+            details=f"reason={args.reason or 'Disabled via CLI'}",
+        )
         print(f"✅ Reference code {args.code} has been disabled")
     else:
         print(f"❌ Reference code {args.code} not found")
@@ -1059,6 +1110,13 @@ def update_inventory(args):
             method='CLI'
         )
 
+        log_audit(
+            "inventory_updated", user_id=admin_id or None,
+            resource_type="Goods", resource_id=args.item_name,
+            details=f"stock {current_stock} -> {final_stock} (CLI)",
+            session=session,
+        )
+
         print(f"✅ Inventory updated for '{args.item_name}'")
         print(f"   Old stock: {current_stock}")
         print(f"   New stock: {final_stock}")
@@ -1148,8 +1206,8 @@ def set_setting(args):
 
     # Special handling for timezone - reload for hot reload support
     if args.key == 'timezone':
-        timezone.reload_timezone()
-        print(f"⏰ Timezone reloaded: {timezone.get_timezone()}")
+        tz_config.reload_timezone()
+        print(f"⏰ Timezone reloaded: {tz_config.get_timezone()}")
 
 
 def get_setting(args):
@@ -1212,6 +1270,12 @@ async def ban_user_cli(args):
         # Get username
         username = await get_telegram_username(user_id)
 
+        log_audit(
+            "user_banned", level="WARNING", user_id=admin_id,
+            resource_type="User", resource_id=user_id,
+            details=f"reason={reason}",
+        )
+
         print(f"✅ User banned successfully")
         print(f"   User: @{username} (ID: {user_id})")
         print(f"   Reason: {reason}")
@@ -1265,6 +1329,11 @@ async def unban_user_cli(args):
         # Get username
         username = await get_telegram_username(user_id)
 
+        log_audit(
+            "user_unbanned", user_id=get_admin_user_id(),
+            resource_type="User", resource_id=user_id,
+        )
+
         print(f"✅ User unbanned successfully")
         print(f"   User: @{username} (ID: {user_id})")
 
@@ -1289,6 +1358,256 @@ async def unban_user_cli(args):
                 print(f"⚠️  Failed to send unban notification: {e}")
     else:
         print(f"❌ Failed to unban user {user_id}")
+
+
+def manage_sale(args):
+    """Set or remove a time-limited sale on a product."""
+    from bot.database.methods.update import set_item_sale
+    from bot.utils.money import format_sale_percent
+
+    admin_id = get_admin_user_id()
+
+    if args.remove:
+        success, error = set_item_sale(args.item_name, None, None)
+        if success:
+            log_audit("item_sale_removed", user_id=admin_id,
+                      resource_type="Goods", resource_id=args.item_name)
+            print(f"✅ Sale removed from '{args.item_name}'")
+        else:
+            print(f"❌ {error}")
+        return
+
+    if args.percent is None or args.days is None:
+        print("❌ --percent and --days are required (or use --remove)")
+        return
+
+    percent = Decimal(str(args.percent))
+    if percent <= 0 or percent >= 100:
+        print("❌ Percent must be between 1 and 99")
+        return
+    if args.days <= 0:
+        print("❌ Days must be greater than 0")
+        return
+
+    until = datetime.now(timezone.utc) + timedelta(days=args.days)
+    success, error = set_item_sale(args.item_name, percent, until)
+    if success:
+        log_audit("item_sale_set", user_id=admin_id,
+                  resource_type="Goods", resource_id=args.item_name,
+                  details=f"percent={format_sale_percent(percent)}; days={args.days}")
+        print(f"✅ Sale -{format_sale_percent(percent)}% set for '{args.item_name}' for {args.days} day(s)")
+    else:
+        print(f"❌ {error}")
+
+
+def handle_stats(args):
+    """Print shop statistics (parity with the admin 'Statistics' screen and web dashboard)."""
+    import datetime as _dt
+    from sqlalchemy import func as _func
+    from bot.database.methods.read import (
+        select_today_users, get_user_count, select_admins,
+        select_count_goods, select_count_categories,
+    )
+    from bot.database.models.main import Order
+
+    today = _dt.date.today().isoformat()
+    with Database().session() as s:
+        status_rows = s.query(Order.order_status, _func.count(Order.id)).group_by(Order.order_status).all()
+        status_counts = {st: c for st, c in status_rows}
+        revenue = s.query(_func.coalesce(_func.sum(Order.total_price), 0)).filter(
+            Order.order_status.in_(['delivered', 'completed'])
+        ).scalar()
+
+    print("=== Shop statistics ===")
+    print(f"Users: {get_user_count()}  (admins: {select_admins()}, new today: {select_today_users(today)})")
+    print(f"Products: {select_count_goods()}  |  Categories: {select_count_categories()}")
+    print("Orders by status:")
+    if status_counts:
+        for st, c in sorted(status_counts.items()):
+            print(f"  • {st}: {c}")
+    else:
+        print("  (no orders yet)")
+    print(f"Revenue (delivered): {revenue} {EnvKeys.PAY_CURRENCY}")
+
+
+def handle_category(args):
+    """Create / list / delete categories."""
+    from bot.database.methods import create_category, delete_category
+    from bot.database.models.main import Categories
+    admin_id = get_admin_user_id()
+    sub = args.category_command
+
+    if sub == 'add':
+        create_category(args.name)
+        log_audit("category_created", user_id=admin_id, resource_type="Category", resource_id=args.name)
+        print(f"✅ Category '{args.name}' created")
+    elif sub == 'list':
+        with Database().session() as s:
+            cats = s.query(Categories).all()
+            if not cats:
+                print("No categories.")
+                return
+            for c in cats:
+                print(f"- {c.name}")
+    elif sub == 'delete':
+        delete_category(args.name)
+        log_audit("category_deleted", level="WARNING", user_id=admin_id, resource_type="Category", resource_id=args.name)
+        print(f"✅ Category '{args.name}' deleted")
+    else:
+        print("Use: category {add|list|delete}")
+
+
+def handle_item(args):
+    """Create / list / delete products (positions)."""
+    from bot.database.methods import create_item, delete_item
+    from bot.database.methods.inventory import add_inventory
+    from bot.database.models.main import Goods
+    admin_id = get_admin_user_id()
+    sub = args.item_command
+
+    if sub == 'add':
+        create_item(args.name, args.description, Decimal(str(args.price)), args.category)
+        if args.stock and args.stock > 0:
+            add_inventory(item_name=args.name, quantity=args.stock,
+                          admin_id=admin_id or 0, comment="CLI: initial stock")
+        log_audit("item_created", user_id=admin_id, resource_type="Goods", resource_id=args.name,
+                  details=f"price={args.price}; category={args.category}; stock={args.stock or 0}")
+        print(f"✅ Item '{args.name}' created")
+    elif sub == 'list':
+        with Database().session() as s:
+            goods = s.query(Goods).all()
+            if not goods:
+                print("No products.")
+                return
+            print(f"{'Name':<28} {'Price':<10} {'Category':<18} {'Stock':<7} {'Reserved'}")
+            print("-" * 75)
+            for g in goods:
+                print(f"{g.name:<28} {str(g.price):<10} {g.category_name:<18} {g.stock_quantity:<7} {g.reserved_quantity}")
+    elif sub == 'delete':
+        delete_item(args.name)
+        log_audit("item_deleted", level="WARNING", user_id=admin_id, resource_type="Goods", resource_id=args.name)
+        print(f"✅ Item '{args.name}' deleted")
+    else:
+        print("Use: item {add|list|delete}")
+
+
+async def broadcast_cli(args):
+    """Send a message to all non-banned users."""
+    from bot.communication.broadcast_system import BroadcastManager
+    from bot.database.models.main import User
+
+    with Database().session() as s:
+        user_ids = [u.telegram_id for u in s.query(User).filter(User.is_banned.is_(False)).all()]
+    if not user_ids:
+        print("No users to broadcast to.")
+        return
+
+    bot = Bot(token=EnvKeys.TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
+    try:
+        manager = BroadcastManager(bot)
+        stats = await manager.broadcast(user_ids, args.message)
+        log_audit("broadcast_sent", user_id=get_admin_user_id(),
+                  details=f"total={stats.total}; sent={stats.sent}; failed={stats.failed}")
+        print(f"✅ Broadcast complete: sent={stats.sent}, failed={stats.failed}, "
+              f"blocked={stats.blocked}, total={stats.total}")
+    finally:
+        await bot.session.close()
+
+
+def handle_broadcast(args):
+    asyncio.run(broadcast_cli(args))
+
+
+def handle_bonus(args):
+    """Grant referral bonus balance to a user (admin-granted, no real order)."""
+    from bot.database.models.main import ReferralEarnings
+    from bot.export.customer_csv import update_customer_bonus
+
+    try:
+        user_id = int(args.user_id)
+    except ValueError:
+        print(f"❌ Invalid user ID: {args.user_id}")
+        return
+    amount = Decimal(str(args.amount))
+    if amount <= 0:
+        print("❌ Amount must be positive")
+        return
+
+    admin_id = get_admin_user_id()
+    with Database().session() as session:
+        user = session.query(User).filter_by(telegram_id=user_id).first()
+        if not user:
+            print(f"❌ User not found: {user_id}")
+            return
+        session.add(ReferralEarnings(
+            referrer_id=user_id, referral_id=None,
+            amount=amount, original_amount=Decimal('0'),
+            created_at=datetime.now(timezone.utc),
+        ))
+
+    username = get_username_by_telegram_id(user_id) or f"user_{user_id}"
+    update_customer_bonus(user_id, username, amount)
+    log_audit("admin_bonus_granted", user_id=admin_id, resource_type="User",
+              resource_id=user_id, details=f"amount={amount}")
+    print(f"✅ Granted {format_price(amount)} bonus to user {user_id}")
+
+
+def promo_cli(args):
+    """Manage promo codes from the CLI."""
+    from bot.database.methods.promo import (
+        create_promo_code, list_promo_codes, set_promo_active, delete_promo_code,
+    )
+    from bot.utils.money import format_sale_percent, format_price, as_datetime
+
+    admin_id = get_admin_user_id()
+    sub = args.promo_command
+
+    if sub == 'create':
+        expires_at = (datetime.now(timezone.utc) + timedelta(hours=args.expires_hours)) if args.expires_hours > 0 else None
+        ok, reason = create_promo_code(
+            code=args.code, discount_type=args.type, discount_value=Decimal(str(args.value)),
+            category_name=args.category, item_name=args.item,
+            max_uses=(args.max_uses or None), expires_at=expires_at, created_by=admin_id,
+        )
+        if ok:
+            log_audit("promo_created", user_id=admin_id, resource_type="PromoCode",
+                      resource_id=args.code.upper(), details=f"{args.type}={args.value}")
+            print(f"✅ Promo code {args.code.upper()} created")
+        else:
+            print(f"❌ Failed to create promo code: {reason}")
+
+    elif sub == 'list':
+        promos = list_promo_codes(active_only=args.active_only, limit=100)
+        if not promos:
+            print("No promo codes found.")
+            return
+        print(f"{'Code':<20} {'Type':<8} {'Value':<10} {'Uses':<10} {'Active':<7} Expires")
+        print("-" * 80)
+        for p in promos:
+            value = f"{format_sale_percent(p['discount_value'])}%" if p['discount_type'] == 'percent' else format_price(p['discount_value'])
+            uses = f"{p['current_uses']}/{p['max_uses'] if p['max_uses'] is not None else '∞'}"
+            exp = as_datetime(p['expires_at'])
+            exp_str = exp.strftime('%Y-%m-%d %H:%M') if exp else 'never'
+            print(f"{p['code']:<20} {p['discount_type']:<8} {value:<10} {uses:<10} {str(p['is_active']):<7} {exp_str}")
+
+    elif sub in ('enable', 'disable'):
+        active = sub == 'enable'
+        if set_promo_active(args.code, active):
+            log_audit("promo_toggled", user_id=admin_id, resource_type="PromoCode",
+                      resource_id=args.code.upper(), details=f"active={active}")
+            print(f"✅ Promo code {args.code.upper()} {'enabled' if active else 'disabled'}")
+        else:
+            print(f"❌ Promo code {args.code.upper()} not found")
+
+    elif sub == 'delete':
+        if delete_promo_code(args.code):
+            log_audit("promo_deleted", level="WARNING", user_id=admin_id,
+                      resource_type="PromoCode", resource_id=args.code.upper())
+            print(f"✅ Promo code {args.code.upper()} deleted")
+        else:
+            print(f"❌ Promo code {args.code.upper()} not found")
+    else:
+        print("Use: promo {create|list|enable|disable|delete}")
 
 
 def main():
@@ -1443,6 +1762,103 @@ def main():
         asyncio.run(unban_user_cli(args))
 
     unban_parser.set_defaults(func=handle_unban)
+
+    # Shop statistics
+    stats_parser = subparsers.add_parser('stats', help='Show shop statistics')
+    stats_parser.set_defaults(func=handle_stats)
+
+    # Grant referral bonus
+    bonus_parser = subparsers.add_parser('bonus', help='Grant referral bonus to a user')
+    bonus_parser.add_argument('user_id', help='Telegram ID of the user')
+    bonus_parser.add_argument('amount', help='Bonus amount to grant')
+    bonus_parser.set_defaults(func=handle_bonus)
+
+    # Category management
+    category_parser = subparsers.add_parser('category', help='Manage categories')
+    category_sub = category_parser.add_subparsers(dest='category_command')
+    cat_add = category_sub.add_parser('add', help='Create a category')
+    cat_add.add_argument('name', help='Category name')
+    cat_add.set_defaults(func=handle_category)
+    cat_list = category_sub.add_parser('list', help='List categories')
+    cat_list.set_defaults(func=handle_category)
+    cat_del = category_sub.add_parser('delete', help='Delete a category (and its products)')
+    cat_del.add_argument('name', help='Category name')
+    cat_del.set_defaults(func=handle_category)
+
+    # Product (item) management
+    item_parser = subparsers.add_parser('item', help='Manage products')
+    item_sub = item_parser.add_subparsers(dest='item_command')
+    item_add = item_sub.add_parser('add', help='Create a product')
+    item_add.add_argument('name', help='Product name')
+    item_add.add_argument('--description', required=True, help='Product description')
+    item_add.add_argument('--price', type=float, required=True, help='Price')
+    item_add.add_argument('--category', required=True, help='Category name (must exist)')
+    item_add.add_argument('--stock', type=int, default=0, help='Initial stock quantity')
+    item_add.set_defaults(func=handle_item)
+    item_list = item_sub.add_parser('list', help='List products')
+    item_list.set_defaults(func=handle_item)
+    item_del = item_sub.add_parser('delete', help='Delete a product')
+    item_del.add_argument('name', help='Product name')
+    item_del.set_defaults(func=handle_item)
+
+    # Broadcast
+    broadcast_parser = subparsers.add_parser('broadcast', help='Send a message to all users')
+    broadcast_parser.add_argument('message', help='Message text (HTML allowed)')
+    broadcast_parser.set_defaults(func=handle_broadcast)
+
+    # Promo code management
+    promo_parser = subparsers.add_parser('promo', help='Manage promo codes')
+    promo_sub = promo_parser.add_subparsers(dest='promo_command')
+    p_create = promo_sub.add_parser('create', help='Create a promo code')
+    p_create.add_argument('code', help='Promo code text')
+    p_create.add_argument('--type', choices=['percent', 'fixed'], required=True, help='Discount type')
+    p_create.add_argument('--value', type=float, required=True, help='Discount value')
+    p_create.add_argument('--category', help='Bind to a category (optional)')
+    p_create.add_argument('--item', help='Bind to a single item (optional)')
+    p_create.add_argument('--max-uses', type=int, default=0, help='Max total uses (0 = unlimited)')
+    p_create.add_argument('--expires-hours', type=int, default=0, help='Validity in hours (0 = never)')
+    p_create.set_defaults(func=promo_cli)
+    p_list = promo_sub.add_parser('list', help='List promo codes')
+    p_list.add_argument('--active-only', action='store_true', help='Show only active codes')
+    p_list.set_defaults(func=promo_cli)
+    p_enable = promo_sub.add_parser('enable', help='Enable a promo code')
+    p_enable.add_argument('code')
+    p_enable.set_defaults(func=promo_cli)
+    p_disable = promo_sub.add_parser('disable', help='Disable a promo code')
+    p_disable.add_argument('code')
+    p_disable.set_defaults(func=promo_cli)
+    p_delete = promo_sub.add_parser('delete', help='Delete a promo code')
+    p_delete.add_argument('code')
+    p_delete.set_defaults(func=promo_cli)
+
+    # Time-limited sale management
+    sale_parser = subparsers.add_parser('sale', help='Manage a product time-limited sale')
+    sale_parser.add_argument('item_name', help='Product name')
+    sale_parser.add_argument('--percent', type=float, help='Discount percent (1-99)')
+    sale_parser.add_argument('--days', type=int, help='Duration in days')
+    sale_parser.add_argument('--remove', action='store_true', help='Remove the active sale')
+    sale_parser.set_defaults(func=manage_sale)
+
+    # Audit log query
+    audit_parser = subparsers.add_parser('audit', help='View the audit log')
+    audit_parser.add_argument('--limit', type=int, default=50, help='Max entries to show (default 50)')
+    audit_parser.add_argument('--action', help='Filter by action name (e.g. order_delivered)')
+    audit_parser.add_argument('--user', type=int, help='Filter by actor user id')
+
+    def handle_audit(args):
+        rows = get_recent_audit_logs(limit=args.limit, action=args.action, user_id=args.user)
+        if not rows:
+            print("No audit entries found.")
+            return
+        print(f"{'Time (UTC)':<20} {'Level':<8} {'Action':<20} {'User':<12} {'Resource':<24} Details")
+        print("-" * 110)
+        for r in rows:
+            ts = r['created_at'].strftime('%Y-%m-%d %H:%M:%S') if r['created_at'] else '-'
+            resource = f"{r['resource_type'] or ''}:{r['resource_id'] or ''}".strip(':')
+            print(f"{ts:<20} {r['level']:<8} {r['action']:<20} {str(r['user_id'] or '-'):<12} "
+                  f"{resource:<24} {r['details'] or ''}")
+
+    audit_parser.set_defaults(func=handle_audit)
 
     # Parse arguments
     args = parser.parse_args()

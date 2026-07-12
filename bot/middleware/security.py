@@ -3,7 +3,6 @@ import hashlib
 import time
 import secrets
 from typing import Dict, Any, Callable, Awaitable
-from collections import defaultdict
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject, CallbackQuery, Message
 
@@ -51,9 +50,16 @@ class SecurityMiddleware(BaseMiddleware):
 
     def __init__(self, secret_key: str = None):
         self.secret_key = secret_key or secrets.token_urlsafe(32)
+        # Transactional / destructive callbacks for this PHYSICAL shop. The
+        # previous set (buy_/pay_/fill-user-balance/set-admin) was inherited from
+        # the digital-goods bot and matched none of this fork's callbacks, so
+        # order placement had no replay protection or audit trail.
         self.critical_actions = {
-            'buy_', 'pay_', 'delete_', 'admin', 'remove-admin',
-            'fill-user-balance', 'set-admin'
+            # user money/state actions
+            'checkout_cart', 'confirm_delivery_info',
+            'payment_method_', 'apply_bonus_', 'use_all_bonus_',
+            # admin destructive actions (delete_item, delete_category, ...)
+            'delete_', 'update_item', 'update_category',
         }
 
     def generate_token(self, user_id: int, action: str) -> str:
@@ -126,10 +132,24 @@ class SecurityMiddleware(BaseMiddleware):
 
             # Checking critical actions
             if self.is_critical_action(event.data):
-                # Logging a critical action
+                # Logging a critical action (file audit)
                 audit_logger.info(
                     f"Critical action: user={user.id}, action={event.data[:50]}"
                 )
+                # Persist to the audit_log DB table too — non-blocking and
+                # best-effort so it never delays or breaks the handler.
+                try:
+                    from bot.database.methods import run_db, log_audit
+                    from bot.database.methods.cache_utils import safe_create_task
+                    safe_create_task(run_db(
+                        log_audit,
+                        "critical_callback",
+                        user_id=user.id,
+                        resource_type="callback",
+                        resource_id=event.data[:120],
+                    ))
+                except Exception:
+                    pass
 
                 # Check that the callback is not too old (protection against replay attacks)
                 if hasattr(event.message, 'date'):
@@ -263,8 +283,10 @@ class AuthenticationMiddleware(BaseMiddleware):
                 return role
 
         # Download from DB
-        from bot.database.methods import check_role
-        role = check_role(user_id) or 0
+        from bot.database.methods import check_role, run_db
+        # Offload the sync DB read so we don't block the event loop on every
+        # admin callback.
+        role = await run_db(check_role, user_id) or 0
 
         # Refresh cache
         self.admin_cache[user_id] = (role, time.time())
@@ -280,116 +302,3 @@ class AuthenticationMiddleware(BaseMiddleware):
         """Unblock a user"""
         self.blocked_users.discard(user_id)
         audit_logger.info(f"User {user_id} has been unblocked")
-
-
-class RateLimitMiddleware(BaseMiddleware):
-    """
-    Middleware for rate limiting to prevent spam and abuse.
-    Tracks requests per user and applies limits.
-    """
-
-    def __init__(self, max_requests: int = 30, time_window: int = 60):
-        """
-        Initialize rate limiter.
-
-        Args:
-            max_requests: Maximum requests allowed per time window
-            time_window: Time window in seconds
-        """
-        self.max_requests = max_requests
-        self.time_window = time_window
-        # user_id -> list of timestamps
-        self.user_requests: Dict[int, list] = defaultdict(list)
-        # user_id -> warning count
-        self.warning_count: Dict[int, int] = defaultdict(int)
-
-    def _cleanup_old_requests(self, user_id: int):
-        """Remove timestamps older than time_window"""
-        current_time = time.time()
-        cutoff_time = current_time - self.time_window
-
-        self.user_requests[user_id] = [
-            ts for ts in self.user_requests[user_id]
-            if ts > cutoff_time
-        ]
-
-    def check_rate_limit(self, user_id: int) -> tuple[bool, int]:
-        """
-        Check if user has exceeded rate limit.
-
-        Args:
-            user_id: User ID to check
-
-        Returns:
-            Tuple of (is_allowed, remaining_requests)
-        """
-        self._cleanup_old_requests(user_id)
-
-        current_count = len(self.user_requests[user_id])
-        remaining = max(0, self.max_requests - current_count)
-
-        if current_count >= self.max_requests:
-            return False, 0
-
-        return True, remaining
-
-    async def __call__(
-            self,
-            handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
-            event: TelegramObject,
-            data: Dict[str, Any]
-    ) -> Any:
-        """Rate limit check"""
-
-        user = None
-        if isinstance(event, (Message, CallbackQuery)):
-            user = event.from_user
-
-        if not user:
-            return await handler(event, data)
-
-        user_id = user.id
-
-        # Check rate limit
-        is_allowed, remaining = self.check_rate_limit(user_id)
-
-        if not is_allowed:
-            # Increment warning count
-            self.warning_count[user_id] += 1
-            warnings = self.warning_count[user_id]
-
-            # Log rate limit violation
-            audit_logger.warning(
-                f"Rate limit exceeded by user {user_id} "
-                f"(warnings: {warnings}, max: {self.max_requests}/{self.time_window}s)"
-            )
-
-            # Track rate limit event
-            metrics = get_metrics()
-            if metrics:
-                metrics.track_event("security_rate_limit_exceeded", user_id, {
-                    "warnings": warnings,
-                    "max_requests": self.max_requests,
-                    "time_window": self.time_window
-                })
-
-            # Send warning to user
-            if isinstance(event, CallbackQuery):
-                await event.answer(
-                    localize("middleware.security.rate_limit"),
-                    show_alert=True
-                )
-            elif isinstance(event, Message):
-                await event.answer(
-                    localize("middleware.security.rate_limit")
-                )
-
-            return None
-
-        # Record this request
-        self.user_requests[user_id].append(time.time())
-
-        # Add rate limit info to data
-        data['rate_limit_remaining'] = remaining
-
-        return await handler(event, data)

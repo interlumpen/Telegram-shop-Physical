@@ -92,10 +92,10 @@ async def start(message: Message, state: FSMContext):
         refcodes_enabled = setting and setting.setting_value.lower() == 'true' if setting else True
 
     # If reference codes are disabled or user is owner, create user directly
-    if not refcodes_enabled or str(user_id) == EnvKeys.OWNER_ID:
+    if not refcodes_enabled or user_id == EnvKeys.OWNER_ID:
         owner_max_role = select_max_role_id()
         referral_id = message.text[7:] if len(message.text) > 7 and message.text[7:] != str(user_id) else None
-        user_role = owner_max_role if str(user_id) == EnvKeys.OWNER_ID else 1
+        user_role = owner_max_role if user_id == EnvKeys.OWNER_ID else 1
 
         create_user(
             telegram_id=int(user_id),

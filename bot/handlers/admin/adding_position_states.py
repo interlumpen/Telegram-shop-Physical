@@ -146,8 +146,8 @@ async def finish_adding_item(message: Message, state):
 
     await message.answer(
         localize('admin.goods.add.result.created_with_stock',
-                 name=item_name,
-                 stock=stock_quantity),
+                 item_name=item_name,
+                 stock_quantity=stock_quantity),
         reply_markup=back('goods_management')
     )
 

@@ -12,9 +12,13 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-# Set test environment variables before importing bot modules
+# Set test environment variables before importing bot modules.
+# EnvKeys validates required vars at import time, so these must be set first.
 os.environ['TOKEN'] = 'test_token_123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 os.environ['OWNER_ID'] = '123456789'
+os.environ.setdefault('POSTGRES_DB', 'test_db')
+os.environ.setdefault('POSTGRES_USER', 'test_user')
+os.environ.setdefault('POSTGRES_PASSWORD', 'test_password')
 os.environ['DATABASE_URL'] = 'sqlite:///:memory:'
 os.environ['REDIS_HOST'] = 'localhost'
 os.environ['LOG_TO_STDOUT'] = '0'

@@ -28,6 +28,25 @@ CSV_HEADERS = [
 # Lock for thread-safe CSV operations
 _csv_lock = threading.Lock()
 
+# Characters that trigger formula evaluation in Excel / LibreOffice / Google Sheets.
+_CSV_INJECTION_PREFIXES = ('=', '+', '-', '@', '\t', '\r')
+
+
+def _sanitize_cell(value) -> str:
+    """Neutralize CSV/formula injection in a cell.
+
+    Customer-controlled free text (username, phone, address, note) can start with
+    '=', '+', '-', '@' etc. and would be executed as a formula when the export is
+    opened in a spreadsheet. Prefix such values with a single quote so they are
+    treated as text. Idempotent: a leading quote is not a trigger character.
+    """
+    if value is None:
+        return ''
+    text = str(value)
+    if text and text[0] in _CSV_INJECTION_PREFIXES:
+        return "'" + text
+    return text
+
 
 def initialize_customer_csv():
     """Initialize the customer CSV file with headers if it doesn't exist"""
@@ -189,10 +208,10 @@ def sync_customer_to_csv(telegram_id: int, username: str):
                 if row.get('Telegram ID') == str(telegram_id):
                     # Update existing row (including username if it changed)
                     row['Telegram ID'] = str(telegram_id)
-                    row['Username'] = username
-                    row['Phone Number'] = customer['phone_number'] or ''
-                    row['Delivery Address'] = customer['delivery_address'] or ''
-                    row['Delivery Note'] = customer['delivery_note'] or ''
+                    row['Username'] = _sanitize_cell(username)
+                    row['Phone Number'] = _sanitize_cell(customer['phone_number'])
+                    row['Delivery Address'] = _sanitize_cell(customer['delivery_address'])
+                    row['Delivery Note'] = _sanitize_cell(customer['delivery_note'])
                     row['Client Total Spendings'] = f"{customer['total_spendings']:.2f}"
                     row['Completed Orders Total'] = str(customer['completed_orders_count'])
                     row['Client Bonus Balance'] = f"{customer['bonus_balance']:.2f}"
@@ -203,10 +222,10 @@ def sync_customer_to_csv(telegram_id: int, username: str):
         if not customer_exists:
             rows.append({
                 'Telegram ID': str(telegram_id),
-                'Username': username,
-                'Phone Number': customer['phone_number'] or '',
-                'Delivery Address': customer['delivery_address'] or '',
-                'Delivery Note': customer['delivery_note'] or '',
+                'Username': _sanitize_cell(username),
+                'Phone Number': _sanitize_cell(customer['phone_number']),
+                'Delivery Address': _sanitize_cell(customer['delivery_address']),
+                'Delivery Note': _sanitize_cell(customer['delivery_note']),
                 'Client Total Spendings': f"{customer['total_spendings']:.2f}",
                 'Completed Orders Total': str(customer['completed_orders_count']),
                 'Client Bonus Balance': f"{customer['bonus_balance']:.2f}"
@@ -328,10 +347,10 @@ async def sync_all_customers_to_csv():
 
                         writer.writerow({
                             'Telegram ID': str(customer.telegram_id),
-                            'Username': username,
-                            'Phone Number': customer.phone_number or '',
-                            'Delivery Address': customer.delivery_address or '',
-                            'Delivery Note': customer.delivery_note or '',
+                            'Username': _sanitize_cell(username),
+                            'Phone Number': _sanitize_cell(customer.phone_number),
+                            'Delivery Address': _sanitize_cell(customer.delivery_address),
+                            'Delivery Note': _sanitize_cell(customer.delivery_note),
                             'Client Total Spendings': f"{float(customer.total_spendings):.2f}",
                             'Completed Orders Total': str(customer.completed_orders_count),
                             'Client Bonus Balance': f"{float(customer.bonus_balance):.2f}"

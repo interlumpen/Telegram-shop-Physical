@@ -27,7 +27,10 @@ class Database(metaclass=SingletonMeta):
             # Additional optimizations
             connect_args={
                 "connect_timeout": 10,
-                "options": "-c statement_timeout=30000"  # 30 seconds per request
+                "options": "-c statement_timeout=30000",  # 30 seconds per request
+                # Force UTF-8 so a non-UTF-8 host locale (e.g. Windows cp1251) can't
+                # crash psycopg2 while decoding server messages/errors.
+                "client_encoding": "utf8",
             }
         )
 

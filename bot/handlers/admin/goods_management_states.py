@@ -4,15 +4,21 @@ from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
+
 from bot.handlers.other import generate_short_hash
 from bot.i18n import localize
 from bot.database.models import Permission
 from bot.database.methods import check_item_cached, delete_item, get_item_info_cached
+from bot.database.methods.update import set_item_sale
+from bot.database.methods.audit import log_audit
 from bot.database.methods.inventory import add_inventory, get_inventory_stats
 from bot.keyboards.inline import back, simple_buttons, lazy_paginated_keyboard
 from bot.logger_mesh import audit_logger
 from bot.filters import HasPermissionFilter
 from bot.states import GoodsFSM, UpdateItemFSM
+from bot.utils.money import effective_price, format_sale_percent, format_price, as_datetime
 
 router = Router()
 
@@ -28,6 +34,7 @@ async def goods_management_callback_handler(call: CallbackQuery, state):
         (localize("admin.goods.update_position"), "update_item"),
         (localize("admin.goods.delete_position"), "delete_item"),
         (localize("admin.goods.view_stock"), "view_stock_status"),
+        (localize("admin.goods.manage_discount"), "manage_discount"),
         (localize("btn.back"), "console"),
     ]
     markup = simple_buttons(actions, per_row=1)
@@ -337,4 +344,142 @@ async def process_stock_quantity(message: Message, state: FSMContext):
                 f'Admin {message.from_user.id} removed {quantity} units from "{item_name}"'
             )
 
+    await state.clear()
+
+
+@router.callback_query(F.data == 'manage_discount', HasPermissionFilter(permission=Permission.SHOP_MANAGE))
+async def manage_discount_handler(call: CallbackQuery, state: FSMContext):
+    """Ask for the product whose discount to manage."""
+    await call.message.edit_text(
+        localize('admin.goods.sale.prompt.item_name'),
+        reply_markup=back("goods_management")
+    )
+    await state.set_state(GoodsFSM.waiting_sale_item_name)
+
+
+@router.message(GoodsFSM.waiting_sale_item_name, F.text)
+async def sale_show_options(message: Message, state: FSMContext):
+    """Show current sale status and offer set/remove actions."""
+    item_name = message.text.strip()
+    item = await check_item_cached(item_name)
+    if not item:
+        await message.answer(
+            localize('admin.goods.position.not_found'),
+            reply_markup=back('goods_management')
+        )
+        await state.clear()
+        return
+
+    final, on_sale, original = effective_price(
+        item.get('price'), item.get('sale_percent'), item.get('sale_until')
+    )
+    if on_sale:
+        until_dt = as_datetime(item.get('sale_until'))
+        status = localize('admin.goods.sale.current_active',
+                          percent=format_sale_percent(item['sale_percent']),
+                          price=format_price(final),
+                          until=until_dt.strftime('%Y-%m-%d %H:%M') if until_dt else '-')
+    else:
+        status = localize('admin.goods.sale.current_none')
+
+    await state.update_data(sale_item_name=item_name)
+    actions = [
+        (localize('admin.goods.sale.set'), f"sale_set_{item_name}"),
+        (localize('admin.goods.sale.remove'), f"sale_remove_{item_name}"),
+        (localize('btn.back'), 'goods_management'),
+    ]
+    await message.answer(
+        localize('admin.goods.sale.title', item=item_name) + "\n\n" + status,
+        parse_mode='HTML',
+        reply_markup=simple_buttons(actions, per_row=1)
+    )
+
+
+@router.callback_query(F.data.startswith('sale_set_'), HasPermissionFilter(permission=Permission.SHOP_MANAGE))
+async def sale_set_start(call: CallbackQuery, state: FSMContext):
+    """Prompt for the discount percentage."""
+    item_name = call.data.replace('sale_set_', '')
+    await state.update_data(sale_item_name=item_name)
+    await call.message.edit_text(
+        localize('admin.goods.sale.prompt.percent'),
+        reply_markup=back('goods_management')
+    )
+    await state.set_state(GoodsFSM.waiting_sale_percent)
+
+
+@router.message(GoodsFSM.waiting_sale_percent, F.text)
+async def sale_set_percent(message: Message, state: FSMContext):
+    """Validate percent, then ask for duration in days."""
+    try:
+        percent = Decimal((message.text or "").strip().replace(',', '.'))
+    except (InvalidOperation, ValueError):
+        await message.answer(localize('admin.goods.sale.invalid_percent'))
+        return
+    if percent <= 0 or percent >= 100:
+        await message.answer(localize('admin.goods.sale.invalid_percent'))
+        return
+
+    await state.update_data(sale_percent=str(percent))
+    await message.answer(
+        localize('admin.goods.sale.prompt.days'),
+        reply_markup=back('goods_management')
+    )
+    await state.set_state(GoodsFSM.waiting_sale_days)
+
+
+@router.message(GoodsFSM.waiting_sale_days, F.text)
+async def sale_set_days(message: Message, state: FSMContext):
+    """Validate duration, apply the sale."""
+    days_text = (message.text or "").strip()
+    if not days_text.isdigit() or int(days_text) <= 0:
+        await message.answer(localize('admin.goods.sale.invalid_days'))
+        return
+
+    days = int(days_text)
+    data = await state.get_data()
+    item_name = data.get('sale_item_name')
+    percent = Decimal(data.get('sale_percent'))
+    sale_until = datetime.now(timezone.utc) + timedelta(days=days)
+
+    success, error = set_item_sale(item_name, percent, sale_until)
+    if not success:
+        await message.answer(
+            localize('admin.goods.sale.error', error=error or ''),
+            reply_markup=back('goods_management')
+        )
+        await state.clear()
+        return
+
+    log_audit(
+        "item_sale_set", user_id=message.from_user.id,
+        resource_type="Goods", resource_id=item_name,
+        details=f"percent={format_sale_percent(percent)}; until={sale_until.isoformat()}",
+    )
+    await message.answer(
+        localize('admin.goods.sale.set_success',
+                 item=item_name, percent=format_sale_percent(percent), days=days),
+        reply_markup=back('goods_management')
+    )
+    await state.clear()
+
+
+@router.callback_query(F.data.startswith('sale_remove_'), HasPermissionFilter(permission=Permission.SHOP_MANAGE))
+async def sale_remove(call: CallbackQuery, state: FSMContext):
+    """Remove an active sale from a product."""
+    item_name = call.data.replace('sale_remove_', '')
+    success, error = set_item_sale(item_name, None, None)
+    if success:
+        log_audit(
+            "item_sale_removed", user_id=call.from_user.id,
+            resource_type="Goods", resource_id=item_name,
+        )
+        await call.message.edit_text(
+            localize('admin.goods.sale.remove_success', item=item_name),
+            reply_markup=back('goods_management')
+        )
+    else:
+        await call.message.edit_text(
+            localize('admin.goods.sale.error', error=error or ''),
+            reply_markup=back('goods_management')
+        )
     await state.clear()

@@ -52,20 +52,35 @@ def load_bitcoin_addresses_from_file() -> int:
     return loaded_count
 
 
-def get_available_bitcoin_address() -> Optional[str]:
+def get_available_bitcoin_address(session=None) -> Optional[str]:
     """
-    Get an available (unused) Bitcoin address
+    Get an available (unused) Bitcoin address.
+
+    When a session is provided the row is locked with FOR UPDATE SKIP LOCKED, so
+    two concurrent checkouts can never be handed the same address. Pass the order
+    transaction's session so selecting and marking-used happen atomically.
+
+    Args:
+        session: Optional SQLAlchemy session. If given, selection is locked and
+                 no separate session/commit is opened.
 
     Returns:
         Bitcoin address string or None if no addresses available
     """
-    with Database().session() as session:
-        btc_addr = session.query(BitcoinAddress).filter_by(is_used=False).first()
+    def _select(s):
+        query = s.query(BitcoinAddress).filter_by(is_used=False)
+        if session is not None:
+            # SKIP LOCKED so a concurrent checkout picks a different row instead
+            # of blocking. (No-op on SQLite in tests.)
+            query = query.with_for_update(skip_locked=True)
+        btc_addr = query.first()
+        return btc_addr.address if btc_addr else None
 
-        if btc_addr:
-            return btc_addr.address
+    if session is not None:
+        return _select(session)
 
-    return None
+    with Database().session() as own_session:
+        return _select(own_session)
 
 
 def mark_bitcoin_address_used(address: str, user_id: int, user_username: str,

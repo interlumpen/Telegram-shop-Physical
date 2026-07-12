@@ -12,6 +12,7 @@ from bot.referrals.codes import (
 )
 from bot.keyboards import back
 from bot.config import EnvKeys
+from bot.i18n import localize
 from bot.monitoring import get_metrics
 
 router = Router()
@@ -26,8 +27,7 @@ async def prompt_reference_code(message: Message, state: FSMContext):
         state: FSM context
     """
     await message.answer(
-        "🔑 Please enter your reference code to access the shop.\n\n"
-        "If you don't have a reference code, please contact the administrator.",
+        localize("refcode.user.prompt_enter"),
         reply_markup=back("cancel_start")
     )
     await state.set_state(ReferenceCodeStates.waiting_reference_code)
@@ -51,8 +51,7 @@ async def process_reference_code(message: Message, state: FSMContext):
 
     if not is_valid:
         await message.answer(
-            f"❌ {error_msg}\n\n"
-            "Please try again or contact the administrator.",
+            localize("refcode.user.error_retry", error=error_msg),
             reply_markup=back("cancel_start")
         )
         return
@@ -60,7 +59,7 @@ async def process_reference_code(message: Message, state: FSMContext):
     # Create user FIRST (required for foreign key constraint)
     from bot.database.methods import select_max_role_id
     owner_max_role = select_max_role_id()
-    user_role = owner_max_role if str(user_id) == EnvKeys.OWNER_ID else 1
+    user_role = owner_max_role if user_id == EnvKeys.OWNER_ID else 1
 
     create_user(
         telegram_id=user_id,
@@ -74,8 +73,7 @@ async def process_reference_code(message: Message, state: FSMContext):
 
     if not success:
         await message.answer(
-            f"❌ {error_msg}\n\n"
-            "Please try again or contact the administrator.",
+            localize("refcode.user.error_retry", error=error_msg),
             reply_markup=back("cancel_start")
         )
         return
@@ -94,10 +92,7 @@ async def process_reference_code(message: Message, state: FSMContext):
 
     # Welcome message
     from bot.handlers.user.main import show_main_menu
-    await message.answer(
-        f"✅ Welcome! Your reference code has been validated.\n"
-        f"You now have access to the shop."
-    )
+    await message.answer(localize("refcode.user.welcome"))
     await show_main_menu(message, state)
 
 
@@ -112,7 +107,7 @@ async def cancel_start(call: CallbackQuery, state: FSMContext):
     """
     await state.clear()
     await call.message.edit_text(
-        "Registration cancelled. Send /start to try again."
+        localize("refcode.user.registration_cancelled")
     )
 
 
@@ -132,25 +127,25 @@ async def show_my_refcodes(call: CallbackQuery, state: FSMContext):
 
     if not codes:
         await call.message.edit_text(
-            "You haven't created any reference codes yet.\n\n"
-            "Users can create reference codes that are valid for 24 hours and can be used by 1 person.",
+            localize("refcode.user.my_none"),
             reply_markup=back("referral_system")
         )
         return
 
-    text = "📋 Your Reference Codes:\n\n"
+    text = localize("refcode.user.my_title")
 
     for code_data in codes:
-        code_type = "Admin" if code_data['is_admin_code'] else "User"
-        status = "✅ Active" if code_data['is_active'] else "❌ Inactive"
-        max_uses = code_data['max_uses'] if code_data['max_uses'] else "Unlimited"
-        expires = code_data['expires_at'].strftime('%Y-%m-%d %H:%M') if code_data['expires_at'] else "Never"
+        code_type = localize("refcode.type_admin") if code_data['is_admin_code'] else localize("refcode.type_user")
+        status = localize("refcode.status_active") if code_data['is_active'] else localize("refcode.status_inactive")
+        max_uses = code_data['max_uses'] if code_data['max_uses'] else localize("refcode.unlimited")
+        expires = code_data['expires_at'].strftime('%Y-%m-%d %H:%M') if code_data['expires_at'] else localize("refcode.never")
 
-        text += f"🔑 <code>{code_data['code']}</code>\n"
-        text += f"   Type: {code_type}\n"
-        text += f"   Uses: {code_data['current_uses']}/{max_uses}\n"
-        text += f"   Expires: {expires}\n"
-        text += f"   Status: {status}\n\n"
+        text += localize(
+            "refcode.user.my_entry",
+            code=code_data['code'], type=code_type,
+            current=code_data['current_uses'], max=max_uses,
+            expires=expires, status=status,
+        )
 
     await call.message.edit_text(text, reply_markup=back("referral_system"), parse_mode='HTML')
     await state.clear()
@@ -183,12 +178,12 @@ async def create_user_refcode(call: CallbackQuery, state: FSMContext):
             expires_str = existing_code['expires_at'].strftime('%Y-%m-%d %H:%M') if existing_code['expires_at'] else 'Never'
 
             await call.message.edit_text(
-                f"ℹ️ You already have an active reference code:\n\n"
-                f"🔑 Code: <code>{existing_code['code']}</code>\n\n"
-                f"⏰ Expires: {expires_str}\n"
-                f"👤 Uses: {existing_code['current_uses']}/{existing_code['max_uses'] or '∞'}\n\n"
-                f"💡 You can only have one active code at a time.\n"
-                f"Wait for it to expire or be used before creating a new one.",
+                localize(
+                    "refcode.user.create_existing",
+                    code=existing_code['code'], expires=expires_str,
+                    current=existing_code['current_uses'],
+                    max=existing_code['max_uses'] or '∞',
+                ),
                 reply_markup=back("referral_system"),
                 parse_mode='HTML'
             )
@@ -210,17 +205,13 @@ async def create_user_refcode(call: CallbackQuery, state: FSMContext):
             metrics.track_conversion("referral_program", "code_created", user_id)
 
         await call.message.edit_text(
-            f"✅ Your reference code has been created!\n\n"
-            f"🔑 Code: <code>{code}</code>\n\n"
-            f"⏰ Valid for: 24 hours\n"
-            f"👤 Can be used by: 1 person\n\n"
-            f"Share this code with someone to invite them to the shop!",
+            localize("refcode.user.create_success", code=code),
             reply_markup=back("referral_system"),
             parse_mode='HTML'
         )
     except Exception as e:
         await call.message.edit_text(
-            f"❌ Error creating reference code: {str(e)}",
+            localize("refcode.user.create_error", error=str(e)),
             reply_markup=back("referral_system")
         )
 

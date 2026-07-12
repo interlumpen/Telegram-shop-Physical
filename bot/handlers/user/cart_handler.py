@@ -79,7 +79,12 @@ async def view_cart_handler(call: CallbackQuery, state: FSMContext):
 
     for item in cart_items:
         text += f"<b>{item['item_name']}</b>\n"
-        text += localize("cart.item.price_format", price=item['price'], currency=EnvKeys.PAY_CURRENCY, quantity=item['quantity']) + "\n"
+        if item.get('on_sale'):
+            text += localize("cart.item.price_format_sale", original=item['original_price'],
+                             price=item['price'], currency=EnvKeys.PAY_CURRENCY, quantity=item['quantity']) + "\n"
+        else:
+            text += localize("cart.item.price_format", price=item['price'],
+                             currency=EnvKeys.PAY_CURRENCY, quantity=item['quantity']) + "\n"
         text += localize("cart.item.subtotal_format", subtotal=item['total'], currency=EnvKeys.PAY_CURRENCY) + "\n\n"
 
     total = await calculate_cart_total(user_id)
