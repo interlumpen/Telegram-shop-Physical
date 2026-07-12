@@ -6,7 +6,8 @@ from decimal import Decimal
 
 from bot.database import Database
 from bot.database.models.main import Order, OrderItem, CustomerInfo, ShoppingCart
-from bot.database.methods import reserve_inventory, get_cart_items, calculate_cart_total
+from bot.database.methods import reserve_inventory, get_cart_items, calculate_cart_total, \
+    validate_promo_code, record_promo_usage
 from bot.keyboards import back, simple_buttons
 from bot.i18n import localize
 from bot.config import EnvKeys
@@ -15,6 +16,7 @@ from bot.logger_mesh import logger
 from bot.payments.bitcoin import get_available_bitcoin_address, mark_bitcoin_address_used
 from bot.export import log_order_creation, sync_customer_to_csv
 from bot.utils import generate_unique_order_code, get_telegram_username
+from bot.utils.money import format_price
 from bot.monitoring import get_metrics
 
 router = Router()
@@ -81,8 +83,8 @@ async def process_delivery_note(message: Message, state: FSMContext):
     # Save to state
     await state.update_data(delivery_note=delivery_note)
 
-    # Check if user has bonus balance and ask about applying it
-    await check_and_ask_about_bonus(message, state, user_id=message.from_user.id)
+    # Offer an optional promo code before the bonus step
+    await ask_promo_code(message, state, user_id=message.from_user.id)
 
 
 @router.callback_query(F.data == "skip_delivery_note", OrderStates.waiting_delivery_note)
@@ -92,7 +94,56 @@ async def skip_delivery_note_handler(call: CallbackQuery, state: FSMContext):
     """
     await state.update_data(delivery_note="")
 
-    # Check if user has bonus balance and ask about applying it
+    # Offer an optional promo code before the bonus step
+    await call.message.delete()
+    await ask_promo_code(call.message, state, user_id=call.from_user.id)
+
+
+async def ask_promo_code(message: Message, state: FSMContext, user_id: int = None):
+    """Prompt the user to enter an optional promo code (or skip)."""
+    await message.answer(
+        localize("order.promo.prompt"),
+        reply_markup=simple_buttons([
+            (localize("btn.promo.skip"), "skip_promo"),
+            (localize("btn.back"), "view_cart"),
+        ], per_row=1)
+    )
+    await state.set_state(OrderStates.waiting_promo_code)
+
+
+@router.message(OrderStates.waiting_promo_code, F.text)
+async def process_promo_code(message: Message, state: FSMContext):
+    """Validate an entered promo code against the current cart."""
+    from bot.database.methods import validate_promo_code
+    user_id = message.from_user.id
+    code = message.text.strip().upper()
+
+    cart_items = await get_cart_items(user_id)
+    if not cart_items:
+        await message.answer(localize("cart.empty_alert"), reply_markup=back("shop"))
+        await state.clear()
+        return
+
+    valid, error_key, discount, _promo = validate_promo_code(code, user_id, cart_items)
+    if not valid:
+        await message.answer(
+            localize(error_key),
+            reply_markup=simple_buttons([
+                (localize("btn.promo.skip"), "skip_promo"),
+                (localize("btn.back"), "view_cart"),
+            ], per_row=1)
+        )
+        return
+
+    await state.update_data(promo_code=code, promo_discount=str(discount))
+    await message.answer(localize("order.promo.applied", code=code, amount=format_price(discount)))
+    await check_and_ask_about_bonus(message, state, user_id=user_id)
+
+
+@router.callback_query(F.data == "skip_promo", OrderStates.waiting_promo_code)
+async def skip_promo_handler(call: CallbackQuery, state: FSMContext):
+    """User skipped the promo code step."""
+    await state.update_data(promo_code=None, promo_discount="0")
     await call.message.delete()
     await check_and_ask_about_bonus(call.message, state, user_id=call.from_user.id, from_callback=True)
 
@@ -231,7 +282,9 @@ async def show_payment_method_selection(message: Message, state: FSMContext, use
     cart_total = await calculate_cart_total(user_id)
     data = await state.get_data()
     bonus_applied = Decimal(str(data.get('bonus_applied', 0)))
-    final_amount = cart_total - bonus_applied
+    promo_code = data.get('promo_code')
+    promo_discount = Decimal(str(data.get('promo_discount', 0) or 0))
+    final_amount = max(Decimal('0'), cart_total - bonus_applied - promo_discount)
 
     # Get localized strings
     text = localize("order.payment_method.choose")
@@ -241,8 +294,13 @@ async def show_payment_method_selection(message: Message, state: FSMContext, use
             localize("order.summary.cart_total", cart_total=cart_total) + "\n"
     )
 
+    if promo_discount > 0:
+        summary_text += localize("order.summary.promo_applied", code=promo_code,
+                                 promo_discount=promo_discount) + "\n"
     if bonus_applied > 0:
         summary_text += localize("order.summary.bonus_applied", bonus_applied=bonus_applied) + "\n"
+
+    if promo_discount > 0 or bonus_applied > 0:
         summary_text += f"<b>" + localize("order.summary.final_amount", final_amount=final_amount) + "</b>\n\n"
     else:
         summary_text += localize("order.summary.total_label", amount=final_amount,
@@ -398,8 +456,17 @@ async def process_bitcoin_payment_new_message(message: Message, state: FSMContex
     data = await state.get_data()
     bonus_applied = Decimal(str(data.get('bonus_applied', 0)))
 
-    # Calculate final amount after bonus
-    final_amount = total_amount - bonus_applied
+    # Re-validate any promo code against the current cart (authoritative discount)
+    promo_code = data.get('promo_code')
+    promo_discount = Decimal('0')
+    if promo_code:
+        p_valid, _p_err, p_disc, _p = validate_promo_code(promo_code, user_id, cart_items)
+        promo_discount = p_disc if p_valid else Decimal('0')
+        if not p_valid:
+            promo_code = None
+
+    # Calculate final amount after bonus and promo
+    final_amount = max(Decimal('0'), total_amount - bonus_applied - promo_discount)
 
     # Get customer info
     with Database().session() as session:
@@ -444,6 +511,8 @@ async def process_bitcoin_payment_new_message(message: Message, state: FSMContex
                 buyer_id=user_id,
                 total_price=Decimal(str(total_amount)),
                 bonus_applied=bonus_applied,
+                promo_code=promo_code,
+                promo_discount=promo_discount,
                 payment_method="bitcoin",
                 delivery_address=customer_info.delivery_address,
                 phone_number=customer_info.phone_number,
@@ -456,6 +525,11 @@ async def process_bitcoin_payment_new_message(message: Message, state: FSMContex
 
             # Generate unique order code
             order.order_code = generate_unique_order_code(session)
+
+            # Record promo usage inside this transaction (once per user enforced by
+            # the unique constraint; current_uses bumped under a row lock).
+            if promo_code and promo_discount > 0:
+                record_promo_usage(promo_code, user_id, order.id, promo_discount, session)
 
             # Process each cart item and create OrderItems
             items_to_reserve = []
@@ -545,13 +619,15 @@ async def process_bitcoin_payment_new_message(message: Message, state: FSMContex
                     localize("order.payment.subtotal_label", amount=total_amount, currency=EnvKeys.PAY_CURRENCY) + "\n"
             )
 
+            if promo_discount > 0:
+                payment_text += localize("order.payment.promo_applied_label", code=promo_code,
+                                         amount=promo_discount, currency=EnvKeys.PAY_CURRENCY) + "\n"
             if bonus_applied > 0:
-                payment_text += (
-                        localize("order.payment.bonus_applied_label", amount=bonus_applied,
-                                 currency=EnvKeys.PAY_CURRENCY) + "\n" +
-                        localize("order.payment.final_amount_label", amount=final_amount,
-                                 currency=EnvKeys.PAY_CURRENCY) + "\n\n"
-                )
+                payment_text += localize("order.payment.bonus_applied_label", amount=bonus_applied,
+                                         currency=EnvKeys.PAY_CURRENCY) + "\n"
+            if promo_discount > 0 or bonus_applied > 0:
+                payment_text += localize("order.payment.final_amount_label", amount=final_amount,
+                                         currency=EnvKeys.PAY_CURRENCY) + "\n\n"
             else:
                 payment_text += localize("order.payment.total_amount_label", amount=total_amount,
                                          currency=EnvKeys.PAY_CURRENCY) + "\n\n"
@@ -629,8 +705,17 @@ async def process_cash_payment_new_message(message: Message, state: FSMContext, 
     data = await state.get_data()
     bonus_applied = Decimal(str(data.get('bonus_applied', 0)))
 
-    # Calculate final amount after bonus
-    final_amount = total_amount - bonus_applied
+    # Re-validate any promo code against the current cart (authoritative discount)
+    promo_code = data.get('promo_code')
+    promo_discount = Decimal('0')
+    if promo_code:
+        p_valid, _p_err, p_disc, _p = validate_promo_code(promo_code, user_id, cart_items)
+        promo_discount = p_disc if p_valid else Decimal('0')
+        if not p_valid:
+            promo_code = None
+
+    # Calculate final amount after bonus and promo
+    final_amount = max(Decimal('0'), total_amount - bonus_applied - promo_discount)
 
     # Get customer info
     with Database().session() as session:
@@ -664,6 +749,8 @@ async def process_cash_payment_new_message(message: Message, state: FSMContext, 
                 buyer_id=user_id,
                 total_price=Decimal(str(total_amount)),
                 bonus_applied=bonus_applied,
+                promo_code=promo_code,
+                promo_discount=promo_discount,
                 payment_method="cash",
                 delivery_address=customer_info.delivery_address,
                 phone_number=customer_info.phone_number,
@@ -676,6 +763,10 @@ async def process_cash_payment_new_message(message: Message, state: FSMContext, 
 
             # Generate unique order code
             order.order_code = generate_unique_order_code(session)
+
+            # Record promo usage inside this transaction.
+            if promo_code and promo_discount > 0:
+                record_promo_usage(promo_code, user_id, order.id, promo_discount, session)
 
             # Process each cart item and create OrderItems
             items_to_reserve = []
@@ -772,13 +863,15 @@ async def process_cash_payment_new_message(message: Message, state: FSMContext, 
                     localize("order.payment.subtotal_label", amount=total_amount, currency=EnvKeys.PAY_CURRENCY) + "\n"
             )
 
+            if promo_discount > 0:
+                payment_text += localize("order.payment.promo_applied_label", code=promo_code,
+                                         amount=promo_discount, currency=EnvKeys.PAY_CURRENCY) + "\n"
             if bonus_applied > 0:
-                payment_text += (
-                        localize("order.payment.bonus_applied_label", amount=bonus_applied,
-                                 currency=EnvKeys.PAY_CURRENCY) + "\n" +
-                        localize("order.payment.cash.amount_with_bonus", amount=final_amount,
-                                 currency=EnvKeys.PAY_CURRENCY) + "\n\n"
-                )
+                payment_text += localize("order.payment.bonus_applied_label", amount=bonus_applied,
+                                         currency=EnvKeys.PAY_CURRENCY) + "\n"
+            if promo_discount > 0 or bonus_applied > 0:
+                payment_text += localize("order.payment.cash.amount_with_bonus", amount=final_amount,
+                                         currency=EnvKeys.PAY_CURRENCY) + "\n\n"
             else:
                 payment_text += localize("order.payment.cash.total_label", amount=total_amount,
                                          currency=EnvKeys.PAY_CURRENCY) + "\n\n"

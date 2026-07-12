@@ -20,6 +20,7 @@ class OrderStates(StatesGroup):
     waiting_delivery_address = State()
     waiting_phone_number = State()
     waiting_delivery_note = State()
+    waiting_promo_code = State()  # For entering an optional promo code
     waiting_bonus_amount = State()  # For applying referral bonus to order
     waiting_payment_method = State()
 

@@ -131,6 +131,9 @@ class Goods(Database.BASE):
                            nullable=False, index=True)
     stock_quantity = Column(Integer, nullable=False, default=0)  # Total stock in warehouse
     reserved_quantity = Column(Integer, nullable=False, default=0)  # Reserved in pending orders
+    # Optional time-limited sale: a percentage discount active until sale_until.
+    sale_percent = Column(Numeric(5, 2), nullable=True)  # 0..100, NULL = no sale
+    sale_until = Column(DateTime(timezone=True), nullable=True)
     category = relationship("Categories", back_populates="item")
 
     @property
@@ -280,6 +283,8 @@ class Order(Database.BASE):
     buyer_id = Column(BigInteger, ForeignKey('users.telegram_id', ondelete="SET NULL"), nullable=True, index=True)
     total_price = Column(Numeric(12, 2), nullable=False)
     bonus_applied = Column(Numeric(12, 2), nullable=True, default=0)  # Referral bonus applied to this order
+    promo_code = Column(String(32), nullable=True)  # Promo code applied to this order (if any)
+    promo_discount = Column(Numeric(12, 2), nullable=True, default=0)  # Discount from the promo code
     payment_method = Column(String(20), nullable=False)  # 'bitcoin' or 'cash'
     delivery_address = Column(Text, nullable=False)
     phone_number = Column(String(50), nullable=False)
@@ -461,6 +466,70 @@ class InventoryLog(Database.BASE):
         self.order_id = order_id
         self.admin_id = admin_id
         self.comment = comment
+
+
+class PromoCode(Database.BASE):
+    """A discount code applied to an order total (percent or fixed amount).
+
+    Optionally bound to a category or a single item; usable a limited number of
+    times overall (max_uses) and at most once per user.
+    """
+    __tablename__ = 'promo_codes'
+
+    code = Column(String(32), primary_key=True)
+    discount_type = Column(String(10), nullable=False)  # 'percent' | 'fixed'
+    discount_value = Column(Numeric(12, 2), nullable=False)  # percent 0..100 or fixed amount
+    category_name = Column(String(100), nullable=True)  # optional binding (no FK: survives category edits)
+    item_name = Column(String(100), nullable=True)  # optional binding to a single product
+    max_uses = Column(Integer, nullable=True)  # None = unlimited total uses
+    current_uses = Column(Integer, nullable=False, default=0)
+    expires_at = Column(DateTime(timezone=True), nullable=True)  # None = never expires
+    is_active = Column(Boolean, nullable=False, default=True, index=True)
+    created_by = Column(BigInteger, ForeignKey('users.telegram_id', ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    usages = relationship("PromoCodeUsage", back_populates="promo", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index('ix_promo_codes_active_expires', 'is_active', 'expires_at'),
+    )
+
+    def __init__(self, code: str, discount_type: str, discount_value, category_name: str = None,
+                 item_name: str = None, max_uses: int = None, expires_at=None,
+                 created_by: int = None, **kw: Any):
+        super().__init__(**kw)
+        self.code = code
+        self.discount_type = discount_type
+        self.discount_value = discount_value
+        self.category_name = category_name
+        self.item_name = item_name
+        self.max_uses = max_uses
+        self.expires_at = expires_at
+        self.created_by = created_by
+
+
+class PromoCodeUsage(Database.BASE):
+    __tablename__ = 'promo_code_usages'
+
+    id = Column(Integer, primary_key=True)
+    code = Column(String(32), ForeignKey('promo_codes.code', ondelete="CASCADE"), nullable=False, index=True)
+    used_by = Column(BigInteger, ForeignKey('users.telegram_id', ondelete="CASCADE"), nullable=False, index=True)
+    order_id = Column(Integer, ForeignKey('orders.id', ondelete="SET NULL"), nullable=True)
+    discount_amount = Column(Numeric(12, 2), nullable=False)
+    used_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    promo = relationship("PromoCode", back_populates="usages")
+
+    __table_args__ = (
+        UniqueConstraint('code', 'used_by', name='uq_promo_code_user'),
+    )
+
+    def __init__(self, code: str, used_by: int, discount_amount, order_id: int = None, **kw: Any):
+        super().__init__(**kw)
+        self.code = code
+        self.used_by = used_by
+        self.discount_amount = discount_amount
+        self.order_id = order_id
 
 
 class AuditLog(Database.BASE):

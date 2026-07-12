@@ -6,3 +6,4 @@ from bot.database.methods.lazy_queries import *
 from bot.database.methods.cache_utils import *
 from bot.database.methods.inventory import *
 from bot.database.methods.audit import *
+from bot.database.methods.promo import *

@@ -49,6 +49,7 @@ def admin_console_keyboard() -> InlineKeyboardMarkup:
     kb.button(text=localize("admin.menu.categories"), callback_data="categories_management")
     kb.button(text=localize("admin.menu.users"), callback_data="user_management")
     kb.button(text=localize("btn.reference_codes"), callback_data="admin_refcode_management")
+    kb.button(text=localize("btn.promo_codes"), callback_data="admin_promo_management")
     kb.button(text=localize("btn.settings"), callback_data="settings_management")
     kb.button(text=localize("admin.menu.broadcast"), callback_data="send_message")
     kb.button(text=localize("btn.back"), callback_data="back_to_menu")

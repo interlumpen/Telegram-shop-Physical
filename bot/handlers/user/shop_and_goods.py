@@ -214,11 +214,26 @@ async def item_info_callback_handler(call: CallbackQuery):
 
     markup = item_info(item_name, back_data)
 
+    # Apply an active time-limited sale to the displayed price.
+    from bot.utils.money import effective_price, format_sale_percent
+    final, on_sale, original = effective_price(
+        item_info_data["price"], item_info_data.get("sale_percent"), item_info_data.get("sale_until")
+    )
+    if on_sale:
+        price_line = localize(
+            "shop.item.price_sale",
+            original=original, amount=final,
+            percent=format_sale_percent(item_info_data["sale_percent"]),
+            currency=EnvKeys.PAY_CURRENCY,
+        )
+    else:
+        price_line = localize("shop.item.price", amount=final, currency=EnvKeys.PAY_CURRENCY)
+
     await call.message.edit_text(
         "\n".join([
             localize("shop.item.title", name=item_name),
             localize("shop.item.description", description=item_info_data["description"]),
-            localize("shop.item.price", amount=item_info_data["price"], currency=EnvKeys.PAY_CURRENCY),
+            price_line,
             quantity_line,
         ]),
         reply_markup=markup,

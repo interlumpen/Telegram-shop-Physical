@@ -5,6 +5,10 @@ class GoodsFSM(StatesGroup):
     """FSM for position (goods) and items management scenarios."""
     waiting_item_name_delete = State()
     waiting_item_name_show = State()
+    # Time-limited sale management
+    waiting_sale_item_name = State()
+    waiting_sale_percent = State()
+    waiting_sale_days = State()
 
 
 class AddItemFSM(StatesGroup):

@@ -76,6 +76,11 @@ This is NOT a typical digital goods Telegram shop. Key differences:
 - **Stock Tracking**: Real-time inventory with `stock_quantity` and `reserved_quantity`
 - **Reservation System**: Items reserved for 24 hours (configurable) during checkout
 - **Shopping Cart**: Add multiple items before checkout
+- **Time-Limited Sales**: Per-product percentage discount with an expiry date; the sale price is computed
+  server-side and reflected in the catalog, cart, and order total
+- **Promo / Discount Codes**: Percent or fixed-amount codes, optionally bound to a category or a single item,
+  with total-usage limits and once-per-user enforcement; applied to the order total and stackable on top of a
+  sale (sale first, then promo)
 - **Lazy Loading**: Efficient pagination for large catalogs
 
 ### 💰 Payment System
@@ -124,19 +129,27 @@ This is NOT a typical digital goods Telegram shop. Key differences:
 
 ### 📊 Monitoring & Logging
 
-- **Web Dashboard**: Real-time metrics at `http://localhost:9090/dashboard`
-- **Health Checks**: System status monitoring
+- **CLI-First Monitoring**: `python bot_cli.py stats` for shop statistics; no human web UI
+- **Health & Metrics Endpoints**: `/health` (Docker healthcheck) and `/metrics/prometheus` (Grafana) on port
+  9090
+- **Audit Log (DB + file)**: Dual-write audit trail (`audit_log` table + `audit.log`) for order status
+  changes, bans, and reference-code / promo / sale / inventory admin actions; queryable via `bot_cli.py audit`
 - **Structured Logging**: Separate logs for orders, reference codes, customer changes
 - **Timezone Support**: Configurable timezone for all logs
-- **Inventory Audit**: Complete audit trail of all inventory changes
+- **Inventory Audit**: Complete audit trail of all inventory changes (`inventory_log`)
 
 ### 🔒 Security
 
-- **Rate Limiting**: Configurable limits per action
-- **Security Middleware**: SQL injection, XSS, CSRF protection
+- **Rate Limiting**: Configurable per-action limits with periodic pruning (bounded memory)
+- **Security Middleware**: SQL injection / XSS pattern detection, CSRF + replay protection on transactional
+  callbacks (checkout, payment, bonus, destructive admin actions), signed with a stable `SECRET_KEY`
+- **JSON-only cache**: cached values are never unpickled (no deserialization RCE)
 - **Cryptographic Codes**: Secure reference code generation
 - **Bot Detection**: Automatic blocking of bot accounts
-- **Transaction Safety**: Row-level locking prevents overselling
+- **Transaction Safety**: Row-level locking prevents overselling; Bitcoin address assignment uses
+  `FOR UPDATE SKIP LOCKED`; promo usage is atomic and once-per-user
+- **CSV Export Hardening**: formula-injection neutralization for customer exports
+- **Audit Trail**: dual-write audit log (file + queryable `audit_log` table)
 
 ## 🏗️ Architecture
 
@@ -149,6 +162,8 @@ This is NOT a typical digital goods Telegram shop. Key differences:
 telegram_shop/
 ├── run.py                          # Entry point
 ├── bot_cli.py                      # CLI admin tool
+├── alembic.ini                     # Alembic configuration
+├── migrations/                     # Alembic migration scripts (env.py + versions/)
 ├── btc_addresses.txt               # Bitcoin address pool
 ├── requirements.txt                # Python dependencies
 ├── Dockerfile                      # Docker image definition
@@ -170,12 +185,15 @@ telegram_shop/
 │   │   ├── dsn.py                  # Connection string builder
 │   │   ├── models/                 # SQLAlchemy models
 │   │   │   └── main.py             # All model definitions
+│   │   ├── migrate.py              # Alembic runner (auto-migrate on startup)
 │   │   └── methods/                # Database operations
 │   │       ├── create.py           # INSERT operations
 │   │       ├── read.py             # SELECT operations
-│   │       ├── update.py           # UPDATE operations
+│   │       ├── update.py           # UPDATE operations (incl. set_item_sale)
 │   │       ├── delete.py           # DELETE operations
 │   │       ├── inventory.py        # Inventory management
+│   │       ├── promo.py            # Promo / discount code logic
+│   │       ├── audit.py            # Audit-log dual-write (file + DB)
 │   │       ├── cache_utils.py      # Cache invalidation
 │   │       └── lazy_queries.py     # Pagination queries
 │   │
@@ -242,7 +260,7 @@ telegram_shop/
 │   │
 │   ├── monitoring/                 # Observability
 │   │   ├── metrics.py              # MetricsCollector
-│   │   ├── dashboard.py            # Web dashboard
+│   │   ├── dashboard.py            # Health + Prometheus HTTP endpoints (no human UI)
 │   │   └── recovery.py             # Error recovery
 │   │
 │   ├── communication/              # User communication
@@ -300,19 +318,26 @@ telegram_shop/
 
 - `User`: Telegram users with role and referral tracking
 - `Role`: Permission-based access control (USER/ADMIN/OWNER)
-- `Goods`: Products with `stock_quantity`, `reserved_quantity`, `price`
+- `Goods`: Products with `stock_quantity`, `reserved_quantity`, `price`, and an optional time-limited sale
+  (`sale_percent` + `sale_until`)
 - `Categories`: Product categories
 - `ShoppingCart`: User cart items
 
 **Order System:**
 
-- `Order`: Orders with status, delivery info, payment method, reservation timeout
+- `Order`: Orders with status, delivery info, payment method, reservation timeout, applied referral bonus and
+  applied promo (`promo_code` + `promo_discount`)
 - `OrderItem`: Individual items in orders with quantity
 - `CustomerInfo`: Customer delivery preferences, spending history, bonus balance
 
 **Inventory System:**
 
 - `InventoryLog`: Complete audit trail of all inventory changes
+
+**Discounts & Promotions:**
+
+- `PromoCode`: Discount codes (percent/fixed, optional category/item binding, usage limit, expiry, active flag)
+- `PromoCodeUsage`: Tracks who used which promo code (unique per user)
 
 **Reference Code System:**
 
@@ -327,9 +352,21 @@ telegram_shop/
 
 - `ReferralEarnings`: Referral bonus transactions
 
-**Configuration:**
+**Audit & Configuration:**
 
+- `AuditLog`: Structured, queryable audit trail (action, level, user, resource, details, IP, timestamp)
 - `BotSettings`: Dynamic bot settings (timezone, bonus percentage, etc.)
+
+### Migrations
+
+The schema is managed with **Alembic** (`migrations/`). Migrations run **automatically on startup**
+(`register_models()`), including a safe transition that stamps an existing pre-Alembic database to the baseline
+before applying newer revisions — so upgrading an existing deployment needs no manual step. To run them by hand:
+
+```bash
+alembic upgrade head        # apply all migrations
+alembic history             # list revisions
+```
 
 ## 📋 Requirements
 
@@ -389,12 +426,23 @@ The application requires the following environment variables:
 <details>
 <summary><b>📊 Monitoring</b></summary>
 
-| Variable          | Description                    | Default     |
-|-------------------|--------------------------------|-------------|
-| `MONITORING_HOST` | Monitoring server bind address | `localhost` |
-| `MONITORING_PORT` | Monitoring server port         | `9090`      |
+| Variable          | Description                                  | Default     |
+|-------------------|----------------------------------------------|-------------|
+| `MONITORING_HOST` | Health/metrics server bind address           | `localhost` |
+| `MONITORING_PORT` | Health/metrics server port                   | `9090`      |
 
+Serves `/health`, `/metrics`, and `/metrics/prometheus` only (no human dashboard).
 **Note**: When running in Docker, set `MONITORING_HOST=0.0.0.0` to allow external access.
+
+</details>
+
+<details>
+<summary><b>🔒 Security</b></summary>
+
+| Variable     | Description                                                                       | Default |
+|--------------|-----------------------------------------------------------------------------------|---------|
+| `SECRET_KEY` | Stable secret for signing CSRF / replay-protection tokens. If unset, a random     | -       |
+|              | per-process key is used (tokens won't survive restarts). Set in production.       |         |
 
 </details>
 
@@ -627,6 +675,87 @@ python bot_cli.py btc list --show-all
 python bot_cli.py btc sync
 ```
 
+### Shop Statistics
+
+```bash
+# Print shop statistics (users, admins, products, categories, orders by status, revenue)
+python bot_cli.py stats
+```
+
+### Category Management
+
+```bash
+python bot_cli.py category add "Electronics"
+python bot_cli.py category list
+python bot_cli.py category delete "Electronics"   # also removes products in it
+```
+
+### Product Management
+
+```bash
+# Create a product (category must already exist); --stock sets the initial quantity
+python bot_cli.py item add "Wireless Mouse" --description "USB-C, 2.4GHz" --price 1500 --category "Electronics" --stock 50
+python bot_cli.py item list
+python bot_cli.py item delete "Wireless Mouse"
+
+# Adjust stock of an existing product
+python bot_cli.py inventory "Wireless Mouse" --set 100
+python bot_cli.py inventory "Wireless Mouse" --add 25
+python bot_cli.py inventory "Wireless Mouse" --remove 10
+```
+
+### Time-Limited Sales
+
+```bash
+# Put a product on sale (percentage discount for a number of days)
+python bot_cli.py sale "Wireless Mouse" --percent 20 --days 7
+
+# Remove the sale
+python bot_cli.py sale "Wireless Mouse" --remove
+```
+
+### Promo Codes
+
+```bash
+# Percentage promo, limited uses, expires in 48h
+python bot_cli.py promo create SUMMER --type percent --value 15 --max-uses 100 --expires-hours 48
+
+# Fixed-amount promo bound to a category (or --item for a single product)
+python bot_cli.py promo create MINUS500 --type fixed --value 500 --category "Electronics"
+
+python bot_cli.py promo list
+python bot_cli.py promo list --active-only
+python bot_cli.py promo disable SUMMER
+python bot_cli.py promo enable SUMMER
+python bot_cli.py promo delete SUMMER
+```
+
+Promo codes discount the **order total** (this shop has no user wallet), stack **on top of** any active per-product sale (sale first, then promo), are usable a limited number of times overall and **at most once per user**.
+
+### Referral Bonus
+
+```bash
+# Grant referral bonus balance to a user
+python bot_cli.py bonus 123456789 500
+```
+
+### Broadcast
+
+```bash
+# Send an HTML message to all non-banned users
+python bot_cli.py broadcast "🎉 <b>New arrivals in stock!</b>"
+```
+
+### Audit Log
+
+```bash
+# View recent audit entries (order status changes, bans, refcode/promo/sale actions, etc.)
+python bot_cli.py audit
+python bot_cli.py audit --limit 100
+python bot_cli.py audit --action order_delivered
+python bot_cli.py audit --user 123456789
+```
+
 ### Data Export
 
 ```bash
@@ -690,21 +819,23 @@ python bot_cli.py unban 123456789
    - Phone number
    - Delivery note (optional)
    ↓
-5. System asks about applying referral bonus (if available)
+5. System asks for an optional promo code (or skip)
    ↓
-6. User selects payment method:
+6. System asks about applying referral bonus (if available)
+   ↓
+7. User selects payment method:
    - Bitcoin: System assigns address from pool, user receives payment instructions
    - Cash on Delivery: Order proceeds directly to confirmation
    ↓
-7. Order created with status: pending → reserved
+8. Order created with status: pending → reserved
    - Inventory RESERVED for 24 hours (configurable)
    - reserved_until timestamp set
    ↓
-8. Admin receives order notification
+9. Admin receives order notification
    ↓
-9. Customer pays (Bitcoin) or prepares cash (COD)
-   ↓
-10. Admin confirms order via CLI:
+10. Customer pays (Bitcoin) or prepares cash (COD)
+    ↓
+11. Admin confirms order via CLI:
     python bot_cli.py order --order-code XXXXX --status-confirmed --delivery-time "YYYY-MM-DD HH:MM"
     - Order status: reserved → confirmed
     - Delivery time set
@@ -712,7 +843,7 @@ python bot_cli.py unban 123456789
     - For Bitcoin: After payment is verified
     - For COD: After reviewing order details
     ↓
-11. Admin delivers order and marks as delivered via CLI:
+12. Admin delivers order and marks as delivered via CLI:
     python bot_cli.py order --order-code XXXXX --status-delivered
     - Order status: confirmed → delivered
     - Inventory DEDUCTED from stock (actual reduction)
@@ -838,15 +969,21 @@ User → Telegram API → aiogram Dispatcher
 
 ## 📊 Monitoring & Logging
 
-### Web Dashboard
+### Monitoring (CLI-first)
 
-Access at `http://localhost:9090/dashboard` (or your configured host/port):
+This shop is administered from the command line, so there is **no human web dashboard**. Runtime observability
+is exposed only as machine-readable endpoints (for Docker/Grafana), and operational statistics come from the CLI:
 
-- Real-time metrics
-- Event tracking
-- Performance analysis
-- Error tracking
-- System health
+```bash
+python bot_cli.py stats     # users, admins, products, categories, orders by status, revenue
+python bot_cli.py audit     # recent audit trail
+```
+
+Endpoints served on `MONITORING_HOST:MONITORING_PORT` (default `localhost:9090`):
+
+- `/health` — JSON health check (used by the Docker healthcheck)
+- `/metrics` — raw metrics as JSON
+- `/metrics/prometheus` — Prometheus exposition format for Grafana
 
 **MetricsCollector** (`bot/monitoring/metrics.py`) tracks:
 

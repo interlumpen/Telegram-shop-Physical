@@ -19,6 +19,34 @@ def set_role(telegram_id: int, role: int) -> None:
     safe_create_task(invalidate_user_cache(telegram_id))
 
 
+def set_item_sale(item_name: str, sale_percent, sale_until) -> tuple[bool, str | None]:
+    """Set or clear a time-limited sale on a product.
+
+    Pass sale_percent=None or sale_until=None to remove the sale.
+    """
+    try:
+        with Database().session() as session:
+            goods = session.query(Goods).filter(
+                Goods.name == item_name
+            ).with_for_update().one_or_none()
+
+            if not goods:
+                return False, localize("admin.goods.update.position.invalid")
+
+            if sale_percent is None or sale_until is None:
+                goods.sale_percent = None
+                goods.sale_until = None
+            else:
+                goods.sale_percent = sale_percent
+                goods.sale_until = sale_until
+
+            safe_create_task(invalidate_item_cache(item_name))
+            return True, None
+
+    except exc.SQLAlchemyError as e:
+        return False, str(e)
+
+
 def update_item(item_name: str, new_name: str, description: str, price, category: str) -> tuple[bool, str | None]:
     """
     Update a Goods record with proper locking.

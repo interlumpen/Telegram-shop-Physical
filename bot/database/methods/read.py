@@ -9,6 +9,7 @@ from sqlalchemy import func
 from bot.database.models import Database, User, Goods, Categories, Role, BoughtGoods, \
     Operations, ReferralEarnings, BotSettings, ShoppingCart, OrderItem, Order
 from bot.caching import get_cache_manager
+from bot.utils.money import effective_price
 
 
 async def run_db(func, *args, **kwargs):
@@ -379,12 +380,18 @@ async def get_cart_items(user_id: int) -> list:
 
         result = []
         for cart_item, good in cart_items:
+            # Apply an active time-limited sale so cart totals and the order
+            # created from them charge the discounted price.
+            final, on_sale, original = effective_price(good.price, good.sale_percent, good.sale_until)
             result.append({
                 'cart_id': cart_item.id,
                 'item_name': cart_item.item_name,
+                'category_name': good.category_name,
                 'quantity': cart_item.quantity,
-                'price': good.price,
-                'total': Decimal(str(good.price)) * cart_item.quantity
+                'price': final,
+                'original_price': original,
+                'on_sale': on_sale,
+                'total': final * cart_item.quantity
             })
         return result
 
